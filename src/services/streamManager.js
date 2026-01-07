@@ -22,6 +22,8 @@ class StreamManager {
         };
 
         this.psProcess = null;
+        this.psQueue = [];
+        this.isPsProcessing = false;
         this.initPersistentPS();
     }
 
@@ -138,51 +140,68 @@ class StreamManager {
         if (!this.psProcess) return null;
 
         return new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-                this.psProcess.stdout.removeAllListeners('data');
-                resolve(null);
-            }, 3000);
-
-            let buffer = '';
-            const onData = (data) => {
-                buffer += data.toString();
-                if (buffer.includes('---FRAME_END---')) {
-                    clearTimeout(timeout);
-                    this.psProcess.stdout.removeListener('data', onData);
-                    const parts = buffer.split('---FRAME_START---');
-                    if (parts.length > 1) {
-                        const content = parts[1].split('---FRAME_END---')[0].trim();
-                        resolve(content);
-                    } else {
-                        resolve(null);
-                    }
-                }
-            };
-
-            this.psProcess.stdout.on('data', onData);
-
-            const script = `
-                try {
-                    Add-Type -AssemblyName System.Windows.Forms, System.Drawing;
-                    $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
-                    $fullBmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
-                    $gFull = [System.Drawing.Graphics]::FromImage($fullBmp);
-                    $gFull.CopyFromScreen(0, 0, 0, 0, $fullBmp.Size);
-                    $bmp = New-Object System.Drawing.Bitmap(${w}, ${h});
-                    $g = [System.Drawing.Graphics]::FromImage($bmp);
-                    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low;
-                    $g.DrawImage($fullBmp, 0, 0, ${w}, ${h});
-                    $ms = New-Object System.IO.MemoryStream;
-                    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
-                    $base64 = [Convert]::ToBase64String($ms.ToArray());
-                    $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
-                    Write-Host "---FRAME_START---";
-                    Write-Host $base64;
-                    Write-Host "---FRAME_END---";
-                } catch { Write-Host "---FRAME_START---ERROR---FRAME_END---" }
-            `;
-            this.psProcess.stdin.write(script.trim().replace(/\n/g, '; ') + "\n");
+            this.psQueue.push({ w, h, resolve });
+            this.processPsQueue();
         });
+    }
+
+    async processPsQueue() {
+        if (this.isPsProcessing || this.psQueue.length === 0) return;
+        this.isPsProcessing = true;
+
+        const { w, h, resolve } = this.psQueue.shift();
+
+        const timeout = setTimeout(() => {
+            this.psProcess.stdout.removeAllListeners('data');
+            this.isPsProcessing = false;
+            resolve(null);
+            this.processPsQueue();
+        }, 5000);
+
+        let buffer = '';
+        const onData = (data) => {
+            buffer += data.toString();
+            if (buffer.includes('---FRAME_END---')) {
+                clearTimeout(timeout);
+                this.psProcess.stdout.removeListener('data', onData);
+
+                const parts = buffer.split('---FRAME_START---');
+                if (parts.length > 1) {
+                    // CRITICAL: Strip all whitespace/newlines from base64 string
+                    const content = parts[1].split('---FRAME_END---')[0].replace(/\s/g, '');
+                    resolve(content);
+                } else {
+                    resolve(null);
+                }
+
+                this.isPsProcessing = false;
+                this.processPsQueue();
+            }
+        };
+
+        this.psProcess.stdout.on('data', onData);
+
+        const script = `
+            try {
+                Add-Type -AssemblyName System.Windows.Forms, System.Drawing;
+                $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
+                $fullBmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
+                $gFull = [System.Drawing.Graphics]::FromImage($fullBmp);
+                $gFull.CopyFromScreen(0, 0, 0, 0, $fullBmp.Size);
+                $bmp = New-Object System.Drawing.Bitmap(${w}, ${h});
+                $g = [System.Drawing.Graphics]::FromImage($bmp);
+                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low;
+                $g.DrawImage($fullBmp, 0, 0, ${w}, ${h});
+                $ms = New-Object System.IO.MemoryStream;
+                $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
+                $base64 = [Convert]::ToBase64String($ms.ToArray());
+                $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
+                [Console]::WriteLine("---FRAME_START---");
+                [Console]::WriteLine($base64);
+                [Console]::WriteLine("---FRAME_END---");
+            } catch { [Console]::WriteLine("---FRAME_START---ERROR---FRAME_END---") }
+        `;
+        this.psProcess.stdin.write(script.trim().replace(/\n/g, '; ') + "\n");
     }
 
     sendLog(msg, type = 'info') {

@@ -53,6 +53,7 @@ class SocketClient {
             console.log('[Socket] Disconnected');
             this.connected = false;
             this.stopHeartbeat();
+            streamManager.stopStream(); // Ensure stream stops on disconnect
         });
 
         // Remote Commands
