@@ -129,8 +129,26 @@ class StreamManager {
     }
 
     async handleRemoteInput(data) {
+        if (!this.inputQueue) this.inputQueue = [];
+
+        // Prevent queue bloat
+        if (this.inputQueue.length > 10) {
+            console.warn('[RemoteInput] Queue too large, skipping event:', data.type);
+            return;
+        }
+
+        this.inputQueue.push(data);
+        this.processInputQueue();
+    }
+
+    async processInputQueue() {
+        if (this.isProcessingInput || this.inputQueue.length === 0) return;
+        this.isProcessingInput = true;
+
+        const data = this.inputQueue.shift();
+
         try {
-            console.log(`[RemoteInput] Event: ${data.type} (x: ${data.x}, y: ${data.y})`);
+            console.log(`[RemoteInput] Processing event: ${data.type} (x: ${data.x}, y: ${data.y})`);
             let psScript = '';
 
             // Win32 Constants
@@ -189,12 +207,14 @@ class StreamManager {
 
             if (psScript) {
                 const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-                exec(psCommand, (err) => {
-                    if (err) console.error('[RemoteInput] PowerShell Error:', err.message);
-                });
+                await execAsync(psCommand, { timeout: 3000 });
             }
         } catch (err) {
-            console.error('[RemoteInput] Fatal Error:', err.message);
+            console.error(`[RemoteInput] Error (${data.type}):`, err.message);
+        } finally {
+            this.isProcessingInput = false;
+            // Process next in queue
+            setImmediate(() => this.processInputQueue());
         }
     }
 
@@ -215,7 +235,10 @@ class StreamManager {
                 $ms.Dispose();
             `;
             const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-            const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 15 });
+            const { stdout } = await execAsync(psCommand, {
+                maxBuffer: 1024 * 1024 * 10,
+                timeout: 5000
+            });
             return `data:image/jpeg;base64,${stdout.trim()}`;
         } catch (e) {
             return null;
