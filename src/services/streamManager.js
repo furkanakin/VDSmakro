@@ -150,19 +150,26 @@ class StreamManager {
                     if (-not ([System.Management.Automation.PSTypeName]'Native.Win32').Type) {
                         Add-Type -MemberDefinition $code -Name Win32 -Namespace Native;
                     }
-                    
-                    # Move to absolute position (0x8001 = MOVE | ABSOLUTE)
-                    [Native.Win32]::mouse_event(0x8001, ${absX}, ${absY}, 0, 0);
                 `;
 
+                // MOUSEEVENTF_MOVE = 0x0001, MOUSEEVENTF_ABSOLUTE = 0x8000
+                // MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
+                // MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010
+
+                let flags = 0x8001; // MOVE | ABSOLUTE
+
                 if (data.type === 'click') {
-                    psScript += ` [Native.Win32]::mouse_event(0x0002, 0, 0, 0, 0); [Native.Win32]::mouse_event(0x0004, 0, 0, 0, 0); `;
+                    flags |= 0x0006; // LEFTDOWN | LEFTUP
+                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
                 } else if (data.type === 'right-click') {
-                    psScript += ` [Native.Win32]::mouse_event(0x0008, 0, 0, 0, 0); [Native.Win32]::mouse_event(0x0010, 0, 0, 0, 0); `;
+                    flags |= 0x0018; // RIGHTDOWN | RIGHTUP
+                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
                 } else if (data.type === 'mousedown') {
-                    psScript += isRight ? ` [Native.Win32]::mouse_event(0x0008, 0, 0, 0, 0); ` : ` [Native.Win32]::mouse_event(0x0002, 0, 0, 0, 0); `;
+                    flags |= isRight ? 0x0008 : 0x0002;
+                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
                 } else if (data.type === 'mouseup') {
-                    psScript += isRight ? ` [Native.Win32]::mouse_event(0x0010, 0, 0, 0, 0); ` : ` [Native.Win32]::mouse_event(0x0004, 0, 0, 0, 0); `;
+                    flags |= isRight ? 0x0010 : 0x0004;
+                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
                 }
             } else if (data.type === 'scroll') {
                 const delta = data.delta || 0;
