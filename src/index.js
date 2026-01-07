@@ -3,10 +3,15 @@ const bootstrapper = require('./services/bootstrapper');
 const socketClient = require('./services/socketClient');
 const processManager = require('./services/processManager');
 
+const { version } = require('../package.json');
+
 async function main() {
     console.log('====================================');
-    console.log('   VDS MAKRO AGENT - CLI VERSION    ');
+    console.log(`   VDS MAKRO AGENT v${version}    `);
     console.log('====================================');
+
+    // Set console title
+    process.stdout.write(`\x1b]0;VDS MAKRO AGENT v${version}\x07`);
 
     try {
         // 1. Run bootstrap (Setup Telegram & Check for updates)

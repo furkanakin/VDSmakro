@@ -141,6 +141,7 @@ class SocketClient {
     }
 
     async register() {
+        const { version } = require('../../package.json');
         const sessions = await this.getSessions();
         let publicIp = '0.0.0.0';
         const ipProviders = [
@@ -164,6 +165,7 @@ class SocketClient {
         const info = {
             id: this.serverId,
             ip: publicIp,
+            version: version, // Version added
             name: os.hostname(),
             platform: os.platform(),
             type: 'macro-node',
