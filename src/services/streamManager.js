@@ -143,7 +143,7 @@ class StreamManager {
             if (frame) {
                 this.socket.emit('macro:stream_frame', {
                     serverId: this.serverId,
-                    image: `data:image/jpeg;base64,${frame}`
+                    image: frame
                 });
             }
         } catch (err) {
@@ -156,7 +156,8 @@ class StreamManager {
         try {
             await this.ensureCaptureTool();
             const { stdout } = await execAsync(`"${this.captureExe}" ${w} ${h}`, { maxBuffer: 10 * 1024 * 1024 });
-            return stdout.trim().replace(/\s/g, '');
+            const base64 = stdout.trim().replace(/\s/g, '');
+            return base64 ? `data:image/jpeg;base64,${base64}` : null;
         } catch (e) {
             console.error('[StreamManager] Screenshot failed:', e.message);
             return null;
