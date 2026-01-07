@@ -176,12 +176,12 @@ class StreamManager {
                     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
                     $base64 = [Convert]::ToBase64String($ms.ToArray());
                     $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
-                    Write-Host "---FRAME_START---"
-                    Write-Host $base64
-                    Write-Host "---FRAME_END---"
+                    Write-Host "---FRAME_START---";
+                    Write-Host $base64;
+                    Write-Host "---FRAME_END---";
                 } catch { Write-Host "---FRAME_START---ERROR---FRAME_END---" }
             `;
-            this.psProcess.stdin.write(script.replace(/\n/g, ' ') + "\n");
+            this.psProcess.stdin.write(script.trim().replace(/\n/g, '; ') + "\n");
         });
     }
 
