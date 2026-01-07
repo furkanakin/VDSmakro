@@ -14,18 +14,6 @@ KEYEVENTF_KEYUP = 0x0002
 
 user32 = ctypes.windll.user32
 
-# Logging setup
-def log(msg):
-    try:
-        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        log_path = os.path.join(log_dir, "python_input.log")
-        with open(log_path, "a") as f:
-            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
-    except:
-        pass
-
 # Key Map
 VK_MAP = {
     "Enter": 0x0D, "Backspace": 0x08, "Tab": 0x09, "Escape": 0x1B, " ": 0x20,
@@ -65,13 +53,11 @@ def key_press(key):
 
 def main():
     if len(sys.argv) < 2:
-        log("Error: No arguments provided")
         return
 
     try:
         data = json.loads(sys.argv[1])
         t = data.get("type")
-        log(f"Handling {t}: {data}")
         
         if t == "click":
             mouse_click(data["x"], data["y"], "left")
@@ -85,10 +71,8 @@ def main():
             for char in data["text"]:
                 key_press(char)
                 time.sleep(0.01)
-        log("Execution successful")
             
     except Exception as e:
-        log(f"Execution failed: {str(e)}")
         sys.stderr.write(str(e))
 
 if __name__ == "__main__":
