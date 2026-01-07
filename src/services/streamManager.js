@@ -195,16 +195,22 @@ class StreamManager {
                 processedData.y = Math.round(data.y * res.h);
             }
 
+            console.log(`[RemoteInput] Executing ${data.type} at (${processedData.x}, ${processedData.y}) [Raw: ${data.x}, ${data.y}] Resolution: ${res.w}x${res.h}`);
+
             const scriptPath = path.join(__dirname, 'input_control.py');
             const payload = JSON.stringify(processedData);
 
             const tryExecute = (cmd) => {
                 return new Promise((resolve, reject) => {
                     const pyProc = spawn(cmd, [scriptPath, payload]);
+
+                    let errOutput = '';
+                    pyProc.stderr.on('data', (d) => errOutput += d.toString());
+
                     pyProc.on('error', (err) => reject(err));
                     pyProc.on('close', (code) => {
                         if (code === 0) resolve();
-                        else reject(new Error(`Exit code ${code}`));
+                        else reject(new Error(`Exit code ${code}: ${errOutput}`));
                     });
                 });
             };
@@ -213,13 +219,14 @@ class StreamManager {
                 await tryExecute('python');
             } catch (err) {
                 try {
+                    console.log('[RemoteInput] python failed, trying py...');
                     await tryExecute('py');
                 } catch (err2) {
-                    console.error('[RemoteInput] Python/Py failed. Make sure Python is installed.');
+                    console.error('[RemoteInput] Error executing Python:', err2.message);
                 }
             }
         } catch (err) {
-            console.error('[RemoteInput] Error:', err.message);
+            console.error('[RemoteInput] Critical Error:', err.message);
         }
     }
 
