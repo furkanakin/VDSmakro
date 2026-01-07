@@ -185,14 +185,28 @@ class StreamManager {
         });
     }
 
+    sendLog(msg, type = 'info') {
+        if (this.socket) {
+            this.socket.emit('macro:log', {
+                serverId: this.serverId,
+                message: `[StreamManager] ${msg}`,
+                type: type,
+                timestamp: new Date()
+            });
+        }
+    }
+
     async handleRemoteInput(data) {
         try {
             const res = await this.getScreenResolution();
             const processedData = { ...data };
 
             if (data.x !== undefined && data.y !== undefined) {
-                processedData.x = Math.round(data.x * res.w);
-                processedData.y = Math.round(data.y * res.h);
+                // Determine if coordinates are already scaled
+                const scaleX = data.x <= 1.1 ? res.w : 1;
+                const scaleY = data.y <= 1.1 ? res.h : 1;
+                processedData.x = Math.round(data.x * scaleX);
+                processedData.y = Math.round(data.y * scaleY);
             }
 
             console.log(`[RemoteInput] Executing ${data.type} at (${processedData.x}, ${processedData.y}) [Raw: ${data.x}, ${data.y}] Resolution: ${res.w}x${res.h}`);
@@ -219,14 +233,16 @@ class StreamManager {
                 await tryExecute('python');
             } catch (err) {
                 try {
-                    console.log('[RemoteInput] python failed, trying py...');
                     await tryExecute('py');
                 } catch (err2) {
-                    console.error('[RemoteInput] Error executing Python:', err2.message);
+                    const errorMsg = `Python execution failed: ${err2.message}`;
+                    console.error(`[RemoteInput] ${errorMsg}`);
+                    this.sendLog(errorMsg, 'error');
                 }
             }
         } catch (err) {
             console.error('[RemoteInput] Critical Error:', err.message);
+            this.sendLog(`Critical error in input handler: ${err.message}`, 'error');
         }
     }
 
