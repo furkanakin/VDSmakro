@@ -43,10 +43,37 @@ class ProcessManager {
         console.log('[ProcessManager] Settings updated:', this.settings);
     }
 
+    async verifyProcessRunning(exePath) {
+        if (!exePath) return false;
+        // Escape single quotes for PowerShell
+        const safePath = exePath.replace(/'/g, "''");
+        const psCommand = `powershell -command "Get-WmiObject Win32_Process | Where-Object { $_.ExecutablePath -eq '${safePath}' } | Measure-Object | Select-Object -ExpandProperty Count"`;
+
+        return new Promise((resolve) => {
+            exec(psCommand, (err, stdout) => {
+                if (err || !stdout) {
+                    resolve(false);
+                    return;
+                }
+                const count = parseInt(stdout.trim());
+                resolve(count > 0);
+            });
+        });
+    }
+
     async launchTelegram(phoneNumber) {
-        // Enforce dynamic limit
+        // 1. Clean up stale/phantom processes from our tracking map first
+        for (const [pid, proc] of this.activeProcesses) {
+            const isActuallyRunning = await this.verifyProcessRunning(proc.exePath);
+            if (!isActuallyRunning) {
+                console.log(`[ProcessManager] Stale process detected for ${proc.phoneNumber} (PID: ${pid}). Removing from map.`);
+                this.activeProcesses.delete(pid);
+            }
+        }
+
+        // 2. Enforce dynamic limit (FIFO)
         if (this.activeProcesses.size >= this.settings.maxProcesses) {
-            console.log(`[ProcessManager] Limit of ${this.settings.maxProcesses} reached. Killing oldest...`);
+            console.log(`[ProcessManager] Limit of ${this.settings.maxProcesses} reached. Finding oldest to kill...`);
             let oldestPid = null;
             let oldestTime = Infinity;
 
@@ -58,12 +85,13 @@ class ProcessManager {
             }
 
             if (oldestPid) {
+                console.log(`[ProcessManager] Killing oldest process (PID: ${oldestPid}) to free slot.`);
                 this.killProcess(oldestPid);
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for cleanup
             }
         }
 
-        // Check if already running
+        // 3. Check if already running (after safety cleanup)
         for (const [pid, proc] of this.activeProcesses) {
             if (proc.phoneNumber === phoneNumber) {
                 console.log(`[ProcessManager] Telegram already open for ${phoneNumber} (PID: ${pid})`);
@@ -96,6 +124,7 @@ class ProcessManager {
                 pid: child.pid,
                 phoneNumber: phoneNumber,
                 folderPath: folderPath,
+                exePath: exePath, // CRITICAL: Store path for reliable path-based killing
                 startTime: Date.now(),
                 duration: duration,
                 process: child
@@ -179,13 +208,29 @@ class ProcessManager {
     killProcess(pid) {
         if (!this.activeProcesses.has(pid)) return;
         const proc = this.activeProcesses.get(pid);
+        const { exePath } = proc;
 
         try {
             console.log(`[ProcessManager] Killing PID ${pid} (${proc.phoneNumber})`);
-            process.kill(pid);
+
+            // 1. Try standard process kill
+            try { process.kill(pid); } catch (e) { }
+
+            // 2. CRITICAL: Path-based Kill (Guarantee RAM cleanup even if PID changed)
+            if (exePath) {
+                const safePath = exePath.replace(/'/g, "''");
+                const psCommand = `powershell -command "Get-WmiObject Win32_Process | Where-Object { $_.ExecutablePath -eq '${safePath}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
+
+                exec(psCommand, (err) => {
+                    if (err) console.log(`[ProcessManager] Path-based kill failed/not found: ${exePath}`);
+                    else console.log(`[ProcessManager] Successfully killed process at path: ${exePath}`);
+                });
+            } else {
+                // Fallback to taskkill if no path stored (backwards compatibility)
+                exec(`taskkill /PID ${pid} /F`);
+            }
         } catch (e) {
-            // Fallback to taskkill
-            exec(`taskkill /PID ${pid} /F`);
+            console.error(`[ProcessManager] Kill error for PID ${pid}:`, e.message);
         }
 
         this.activeProcesses.delete(pid);
