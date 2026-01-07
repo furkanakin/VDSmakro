@@ -24,6 +24,10 @@ class StreamManager {
         this.psProcess = null;
         this.psQueue = [];
         this.isPsProcessing = false;
+
+        this.inputQueue = [];
+        this.isProcessingInput = false;
+
         this.initPersistentPS();
     }
 
@@ -123,6 +127,10 @@ class StreamManager {
     async captureAndSend() {
         if (!this.socket || !this.isStreaming || !this.psProcess) return;
 
+        // SAFEGUARD: If queue is backed up (manual screenshot or slow capture), 
+        // skip this stream frame to prioritize responsiveness.
+        if (this.psQueue.length > 1) return;
+
         try {
             const res = this.resolutions[this.settings.quality] || this.resolutions['540p'];
             const frame = await this.psRequestScreenshot(res.w, res.h);
@@ -220,20 +228,36 @@ class StreamManager {
     }
 
     async handleRemoteInput(data) {
+        this.inputQueue.push(data);
+        this.processInputQueue();
+    }
+
+    async processInputQueue() {
+        if (this.isProcessingInput || this.inputQueue.length === 0) return;
+        this.isProcessingInput = true;
+
+        const data = this.inputQueue.shift();
+
+        // THROTTLE: If this is a move event and the NEXT event in queue is also move/drag, skip this one
+        if ((data.type === 'mousemove' || data.type === 'mousedrag') &&
+            this.inputQueue.length > 0 &&
+            (this.inputQueue[0].type === 'mousemove' || this.inputQueue[0].type === 'mousedrag')) {
+            this.isProcessingInput = false;
+            return this.processInputQueue();
+        }
+
         try {
             const res = await this.getScreenResolution();
             const processedData = { ...data };
 
             if (data.x !== undefined && data.y !== undefined) {
-                // Determine if coordinates are already scaled
                 const scaleX = data.x <= 1.1 ? res.w : 1;
                 const scaleY = data.y <= 1.1 ? res.h : 1;
                 processedData.x = Math.round(data.x * scaleX);
                 processedData.y = Math.round(data.y * scaleY);
-                console.log(`[RemoteInput] Executing ${data.type} at (${processedData.x}, ${processedData.y}) [Raw: ${data.x}, ${data.y}] Resolution: ${res.w}x${res.h}`);
-            } else {
-                console.log(`[RemoteInput] Executing ${data.type} [Data: ${JSON.stringify(data)}] Resolution: ${res.w}x${res.h}`);
             }
+
+            console.log(`[RemoteInput] Executing ${data.type} [Queue: ${this.inputQueue.length}]`);
 
             const scriptPath = path.join(__dirname, 'input_control.py');
             const payload = JSON.stringify(processedData);
@@ -241,10 +265,8 @@ class StreamManager {
             const tryExecute = (cmd) => {
                 return new Promise((resolve, reject) => {
                     const pyProc = spawn(cmd, [scriptPath, payload]);
-
                     let errOutput = '';
                     pyProc.stderr.on('data', (d) => errOutput += d.toString());
-
                     pyProc.on('error', (err) => reject(err));
                     pyProc.on('close', (code) => {
                         if (code === 0) resolve();
@@ -259,14 +281,15 @@ class StreamManager {
                 try {
                     await tryExecute('py');
                 } catch (err2) {
-                    const errorMsg = `Python execution failed: ${err2.message}`;
-                    console.error(`[RemoteInput] ${errorMsg}`);
-                    this.sendLog(errorMsg, 'error');
+                    console.error(`[RemoteInput] Python failure: ${err2.message}`);
                 }
             }
         } catch (err) {
-            console.error('[RemoteInput] Critical Error:', err.message);
-            this.sendLog(`Critical error in input handler: ${err.message}`, 'error');
+            console.error('[RemoteInput] Queue Error:', err.message);
+        } finally {
+            this.isProcessingInput = false;
+            // Immediate next task if queue not empty
+            setImmediate(() => this.processInputQueue());
         }
     }
 
