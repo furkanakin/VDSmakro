@@ -7,6 +7,7 @@ const path = require('path');
 const processManager = require('./processManager');
 const streamManager = require('./streamManager');
 const copierService = require('./copierService');
+const bootstrapper = require('./bootstrapper');
 
 class SocketClient {
     constructor() {
