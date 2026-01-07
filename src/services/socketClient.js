@@ -89,6 +89,14 @@ class SocketClient {
                         this.sendLog(`Sessison senkronize edildi: ${sessions.length} adet.`, 'success');
                         break;
 
+                    case 'update_agent':
+                        this.sendLog('Sistem güncellemesi bașlatıldı. Program indiriliyor ve yeniden bașlatılacak...', 'success');
+                        const updateRes = await bootstrapper.updateFromGithub();
+                        if (!updateRes) {
+                            this.sendLog('Hata: Güncelleme bașarısız oldu.', 'error');
+                        }
+                        break;
+
                     default:
                         console.log('[Socket] Unknown command:', command.type);
                 }

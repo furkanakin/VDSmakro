@@ -78,12 +78,9 @@ class Bootstrapper {
     }
 
     async updateFromGithub() {
-        console.log('[Bootstrap] Checking for system updates from GitHub...');
-        // Implementation for downloading all files excluding node_modules
-        // This is tricky if the app is currently running. Usually requires a launcher/updater script.
-        // For now, I'll implement the downloader as requested.
-
+        console.log('[Bootstrap] Downloading updates from GitHub...');
         const zipPath = path.join(this.basePath, 'data/update.zip');
+
         try {
             const response = await axios({
                 url: this.githubRepoUrl,
@@ -101,27 +98,38 @@ class Bootstrapper {
 
             console.log('[Bootstrap] Extracting updates...');
             const zip = new AdmZip(zipPath);
-            // We need to extract files one by one to avoid overwriting node_modules or extracting to a subfolder
             const zipEntries = zip.getEntries();
+            const rootFolderInZip = zipEntries[0].entryName.split('/')[0];
 
-            zipEntries.forEach(entry => {
-                // Skip node_modules and the root folder in the zip (GitHub adds a root folder)
-                if (!entry.entryName.includes('node_modules')) {
-                    const relativePath = entry.entryName.split('/').slice(1).join('/');
-                    if (relativePath) {
-                        const targetPath = path.join(this.basePath, relativePath);
-                        if (entry.isDirectory) {
-                            fs.ensureDirSync(targetPath);
-                        } else {
-                            fs.writeFileSync(targetPath, entry.getData());
-                        }
-                    }
+            for (const entry of zipEntries) {
+                // Skip the root folder entry itself and anything in node_modules or data
+                if (entry.isDirectory || entry.entryName.includes('node_modules') || entry.entryName.includes('data/') || entry.entryName.includes('.env')) {
+                    continue;
                 }
-            });
 
-            console.log('[Bootstrap] GitHub update complete.');
+                // Remove the root folder name from GitHub zip
+                const relativePath = entry.entryName.replace(rootFolderInZip + '/', '');
+                if (!relativePath) continue;
+
+                const targetPath = path.join(this.basePath, relativePath);
+                await fs.ensureDir(path.dirname(targetPath));
+
+                // Read content and write
+                const content = entry.getData();
+                await fs.writeFile(targetPath, content);
+            }
+
+            console.log('[Bootstrap] Update applied successfully. Restarting in 3 seconds...');
+
+            // Wait a bit then exit - Baslat.bat will restart us
+            setTimeout(() => {
+                process.exit(0);
+            }, 3000);
+
+            return true;
         } catch (err) {
-            console.error('[Bootstrap] Failed to update from GitHub:', err.message);
+            console.error('[Bootstrap] Update failed:', err.message);
+            return false;
         }
     }
 }

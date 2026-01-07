@@ -1,5 +1,6 @@
 @echo off
 title VDS Makro Agent - Baslatiliyor...
+:start
 echo ========================================
 echo       VDS MAKRO AGENT BASLATICI
 echo ========================================
@@ -22,7 +23,8 @@ if not exist "node_modules" (
 echo [BILGI] Ajan baslatiliyor...
 node src/index.js
 
-if %errorlevel% neq 0 (
-    echo [HATA] Uygulama beklenmedik bir sekilde sonlandi.
-    pause
-)
+:: If the agent exits with code 0 (success update), it will restart
+echo [BILGI] Uygulama sonlandi. 5 saniye icinde yeniden baslatiliyor...
+echo [NOT] Kapatmak icin pencereyi kapatabilirsiniz.
+timeout /t 5
+goto start
