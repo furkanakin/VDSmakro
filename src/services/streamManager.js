@@ -193,7 +193,11 @@ class StreamManager {
                 $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low;
                 $g.DrawImage($fullBmp, 0, 0, ${w}, ${h});
                 $ms = New-Object System.IO.MemoryStream;
-                $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
+                $enc = [System.Drawing.Imaging.Encoder]::Quality;
+                $encParams = New-Object System.Drawing.Imaging.EncoderParameters(1);
+                $encParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter($enc, 60);
+                $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.FormatDescription -eq "JPEG" };
+                $bmp.Save($ms, $codec, $encParams);
                 $base64 = [Convert]::ToBase64String($ms.ToArray());
                 $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
                 [Console]::WriteLine("---FRAME_START---");
