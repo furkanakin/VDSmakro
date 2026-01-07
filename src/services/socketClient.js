@@ -64,8 +64,16 @@ class SocketClient {
                 switch (command.type) {
                     case 'open_telegram':
                         if (command.phoneNumber) {
-                            await processManager.launchTelegram(command.phoneNumber);
-                            this.sendLog(`Telegram başlatıldı: ${command.phoneNumber}`, 'success');
+                            const res = await processManager.launchTelegram(command.phoneNumber);
+                            if (res.success) {
+                                this.socket.emit('macro:process_started', {
+                                    accountId: command.accountId,
+                                    phoneNumber: command.phoneNumber,
+                                    pid: res.pid,
+                                    status: 'started'
+                                });
+                                this.sendLog(`Telegram bașlatıldı: ${command.phoneNumber} (PID: ${res.pid})`, 'success');
+                            }
                         }
                         break;
 
