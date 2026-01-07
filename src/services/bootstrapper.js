@@ -139,7 +139,11 @@ class Bootstrapper {
 
             for (const entry of zipEntries) {
                 // Skip the root folder entry itself and anything in node_modules or data
-                if (entry.isDirectory || entry.entryName.includes('node_modules') || entry.entryName.includes('data/') || entry.entryName.includes('.env')) {
+                if (entry.isDirectory ||
+                    entry.entryName.includes('node_modules') ||
+                    entry.entryName.includes('data/') ||
+                    entry.entryName.includes('hesaplar/') ||
+                    entry.entryName.includes('.env')) {
                     continue;
                 }
 

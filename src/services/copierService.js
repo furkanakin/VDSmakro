@@ -33,6 +33,7 @@ class CopierService {
 
                 // If already exists, skip (as per previous python logic requirement "already exists, skipping")
                 if (await fs.pathExists(targetExe)) {
+                    console.log(`[Copier] Atlanıyor (Zaten var): ${folder}`);
                     skippedCount++;
                     continue;
                 }
