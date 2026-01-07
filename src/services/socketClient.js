@@ -151,20 +151,29 @@ class SocketClient {
         let publicIp = '0.0.0.0';
         const ipProviders = [
             'https://api.ipify.org',
+            'https://checkip.amazonaws.com',
             'https://ifconfig.me/ip',
-            'https://ident.me'
+            'https://ident.me',
+            'https://api.ip.sb/ip'
         ];
 
         for (const provider of ipProviders) {
             try {
-                const res = await axios.get(provider, { timeout: 5000 });
-                if (res.data && typeof res.data === 'string') {
-                    publicIp = res.data.trim();
-                    break;
+                const res = await axios.get(provider, { timeout: 8000 });
+                if (res.data) {
+                    publicIp = res.data.toString().trim();
+                    if (publicIp.split('.').length === 4) {
+                        console.log(`[Socket] Public IP detected via ${provider}: ${publicIp}`);
+                        break;
+                    }
                 }
             } catch (e) {
                 // Try next
             }
+        }
+
+        if (publicIp === '0.0.0.0') {
+            console.error('[Socket] ERROR: Could not detect public IP from any provider!');
         }
 
         const info = {
