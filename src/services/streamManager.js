@@ -1,6 +1,4 @@
-const { exec, spawn } = require('child_process');
-const util = require('util');
-const execAsync = util.promisify(exec);
+const { spawn } = require('child_process');
 
 class StreamManager {
     constructor() {
@@ -20,6 +18,7 @@ class StreamManager {
         };
 
         this.psProcess = null;
+        this.screenshotPromise = null;
         this.initPersistentPS();
     }
 
@@ -28,11 +27,12 @@ class StreamManager {
 
         console.log('[StreamManager] Initializing persistent PowerShell process...');
         this.psProcess = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-            stdio: ['pipe', 'pipe', 'inherit']
+            stdio: ['pipe', 'pipe', 'pipe']
         });
 
         // Add Win32 mouse_event definition ONCE
         const initScript = `
+            $ErrorActionPreference = "SilentlyContinue"
             Add-Type -MemberDefinition @'
                 [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, uint dwExtraInfo);
                 [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
@@ -42,6 +42,10 @@ class StreamManager {
             Write-Host "PS_READY"
         `;
         this.psProcess.stdin.write(initScript + "\n");
+
+        this.psProcess.stderr.on('data', (data) => {
+            // console.error('[StreamManager] PS Error:', data.toString());
+        });
 
         this.psProcess.on('exit', () => {
             console.log('[StreamManager] Persistent PS exited, restarting...');
@@ -105,37 +109,70 @@ class StreamManager {
     }
 
     async captureAndSend() {
-        if (!this.socket || !this.isStreaming) return;
+        if (!this.socket || !this.isStreaming || !this.psProcess) return;
+
         try {
             const res = this.resolutions[this.settings.quality] || this.resolutions['540p'];
-            const psScript = `
+            const frame = await this.psRequestScreenshot(res.w, res.h);
+
+            if (frame && frame !== 'ERROR') {
+                this.socket.emit('macro:stream_frame', {
+                    serverId: this.serverId,
+                    image: `data:image/jpeg;base64,${frame}`
+                });
+            }
+        } catch (err) { }
+    }
+
+    // Helper for command/response over persistent PS
+    async psRequestScreenshot(w, h) {
+        if (!this.psProcess) return null;
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                this.psProcess.stdout.removeListener('data', onData);
+                resolve(null);
+            }, 5000);
+
+            let buffer = '';
+            const onData = (data) => {
+                buffer += data.toString();
+                if (buffer.includes('---FRAME_END---')) {
+                    clearTimeout(timeout);
+                    this.psProcess.stdout.removeListener('data', onData);
+                    const parts = buffer.split('---FRAME_START---');
+                    if (parts.length > 1) {
+                        const content = parts[1].split('---FRAME_END---')[0].trim();
+                        resolve(content);
+                    } else {
+                        resolve(null);
+                    }
+                }
+            };
+
+            this.psProcess.stdout.on('data', onData);
+
+            const script = `
                 try {
                     $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
                     $fullBmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
                     $gFull = [System.Drawing.Graphics]::FromImage($fullBmp);
                     $gFull.CopyFromScreen(0, 0, 0, 0, $fullBmp.Size);
-                    $bmp = New-Object System.Drawing.Bitmap(${res.w}, ${res.h});
+                    $bmp = New-Object System.Drawing.Bitmap(${w}, ${h});
                     $g = [System.Drawing.Graphics]::FromImage($bmp);
                     $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low;
-                    $g.DrawImage($fullBmp, 0, 0, ${res.w}, ${res.h});
+                    $g.DrawImage($fullBmp, 0, 0, ${w}, ${h});
                     $ms = New-Object System.IO.MemoryStream;
                     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
                     $base64 = [Convert]::ToBase64String($ms.ToArray());
                     $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
-                    $base64
-                } catch { "ERROR" }
+                    Write-Host "---FRAME_START---"
+                    Write-Host $base64
+                    Write-Host "---FRAME_END---"
+                } catch { Write-Host "---FRAME_START---ERROR---FRAME_END---" }
             `;
-            const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-            const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 10, timeout: 5000 });
-            const output = stdout.trim();
-
-            if (output && output !== 'ERROR') {
-                this.socket.emit('macro:stream_frame', {
-                    serverId: this.serverId,
-                    image: `data:image/jpeg;base64,${output}`
-                });
-            }
-        } catch (err) { }
+            this.psProcess.stdin.write(script.replace(/\n/g, ' ') + "\n");
+        });
     }
 
     handleRemoteInput(data) {
@@ -173,24 +210,7 @@ class StreamManager {
     }
 
     async getScreenshot() {
-        try {
-            const psScript = `
-                $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
-                $bmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
-                $g = [System.Drawing.Graphics]::FromImage($bmp);
-                $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size);
-                $ms = New-Object System.IO.MemoryStream;
-                $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
-                $base64 = [Convert]::ToBase64String($ms.ToArray());
-                $g.Dispose(); $bmp.Dispose(); $ms.Dispose();
-                $base64
-            `;
-            const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-            const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 10, timeout: 5000 });
-            return `data:image/jpeg;base64,${stdout.trim()}`;
-        } catch (e) {
-            return null;
-        }
+        return this.psRequestScreenshot(1920, 1080); // Default for single shots
     }
 }
 
