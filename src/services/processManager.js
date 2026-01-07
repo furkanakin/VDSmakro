@@ -21,16 +21,22 @@ class ProcessManager {
     }
 
     updateSettings(newSettings) {
-        if (newSettings.maxProcesses) this.settings.maxProcesses = parseInt(newSettings.maxProcesses);
-        if (newSettings.rotationInterval) {
-            this.settings.rotationInterval = parseInt(newSettings.rotationInterval);
+        // Support both snake_case (Backend) and camelCase (Agent)
+        const maxProc = newSettings.max_processes || newSettings.maxProcesses;
+        const rotInt = newSettings.rotation_interval || newSettings.rotationInterval;
+        const wMin = newSettings.warmup_min || newSettings.warmupMin;
+        const wMax = newSettings.warmup_max || newSettings.warmupMax;
+
+        if (maxProc) this.settings.maxProcesses = parseInt(maxProc);
+        if (rotInt) {
+            this.settings.rotationInterval = parseInt(rotInt);
             if (this.rotationEnabled) {
                 this.stopRotation();
                 this.startRotation();
             }
         }
-        if (newSettings.warmupMin) this.settings.warmupMin = parseInt(newSettings.warmupMin) * 60 * 1000;
-        if (newSettings.warmupMax) this.settings.warmupMax = parseInt(newSettings.warmupMax) * 60 * 1000;
+        if (wMin) this.settings.warmupMin = parseInt(wMin) * 60 * 1000;
+        if (wMax) this.settings.warmupMax = parseInt(wMax) * 60 * 1000;
 
         console.log('[ProcessManager] Settings updated:', this.settings);
     }

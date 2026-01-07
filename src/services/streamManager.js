@@ -83,13 +83,17 @@ class StreamManager {
     }
 
     updateSettings(newSettings) {
+        // Support both snake_case (Backend) and camelCase (Agent)
+        const quality = newSettings.stream_quality || newSettings.quality;
+        const fps = newSettings.stream_fps || newSettings.fps;
+
         let changed = false;
-        if (newSettings.quality && newSettings.quality !== this.settings.quality) {
-            this.settings.quality = newSettings.quality;
+        if (quality && quality !== this.settings.quality) {
+            this.settings.quality = quality;
             changed = true;
         }
-        if (newSettings.fps) {
-            const newFps = parseInt(newSettings.fps);
+        if (fps) {
+            const newFps = parseInt(fps);
             if (newFps !== this.settings.fps) {
                 this.settings.fps = newFps;
                 changed = true;
@@ -120,7 +124,12 @@ class StreamManager {
         if (!this.isStreaming) return;
         const startTime = Date.now();
         await this.captureAndSend();
-        const waitTime = Math.max(200, (1000 / this.settings.fps) - (Date.now() - startTime));
+
+        // Dynamically calculate wait time based on target FPS. Minimum 50ms floor.
+        const targetDelay = 1000 / this.settings.fps;
+        const elapsed = Date.now() - startTime;
+        const waitTime = Math.max(50, targetDelay - elapsed);
+
         this.interval = setTimeout(() => this.captureLoop(), waitTime);
     }
 
