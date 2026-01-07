@@ -143,16 +143,27 @@ class SocketClient {
     async register() {
         const sessions = await this.getSessions();
         let publicIp = '0.0.0.0';
-        try {
-            const res = await axios.get('https://api.ipify.org');
-            publicIp = res.data;
-        } catch (e) {
-            console.error('[Socket] Failed to get public IP:', e.message);
+        const ipProviders = [
+            'https://api.ipify.org',
+            'https://ifconfig.me/ip',
+            'https://ident.me'
+        ];
+
+        for (const provider of ipProviders) {
+            try {
+                const res = await axios.get(provider, { timeout: 5000 });
+                if (res.data && typeof res.data === 'string') {
+                    publicIp = res.data.trim();
+                    break;
+                }
+            } catch (e) {
+                // Try next
+            }
         }
 
         const info = {
             id: this.serverId,
-            ip: publicIp, // Crucial for Master identification
+            ip: publicIp,
             name: os.hostname(),
             platform: os.platform(),
             type: 'macro-node',

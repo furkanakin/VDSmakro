@@ -60,8 +60,8 @@ class StreamManager {
         try {
             const res = this.resolutions[this.settings.quality] || this.resolutions['540p'];
 
-            // Use CopyFromScreen which is often more reliable on VPS than direct GDI StretchBlt of DesktopDC
-            const psCommand = `powershell -command "[Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $screen = [System.Windows.Forms.Screen]::PrimaryScreen; $bmp = New-Object System.Drawing.Bitmap(${res.w}, ${res.h}); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low; $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); [Convert]::ToBase64String($ms.ToArray()); $g.Dispose(); $bmp.Dispose(); $ms.Dispose();"`;
+            // We need to capture FULL screen first, then draw it RE-SIZED to our target bitmap
+            const psCommand = `powershell -command "[Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $screen = [System.Windows.Forms.Screen]::PrimaryScreen; $fullBmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height); $gFull = [System.Drawing.Graphics]::FromImage($fullBmp); $gFull.CopyFromScreen(0, 0, 0, 0, $fullBmp.Size); $bmp = New-Object System.Drawing.Bitmap(${res.w}, ${res.h}); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low; $g.DrawImage($fullBmp, 0, 0, ${res.w}, ${res.h}); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); [Convert]::ToBase64String($ms.ToArray()); $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();"`;
 
             const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 10 });
             const b64 = stdout.trim();
