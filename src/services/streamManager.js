@@ -130,24 +130,29 @@ class StreamManager {
 
     async handleRemoteInput(data) {
         try {
+            console.log(`[RemoteInput] Event: ${data.type} (x: ${data.x}, y: ${data.y})`);
             let psScript = '';
 
-            // Common Win32 Mouse Event Constants
-            // MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
-            // MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010
-            // MOUSEEVENTF_WHEEL = 0x0800
+            // Win32 Constants
+            // MOUSEEVENTF_MOVE = 0x0001, MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
+            // MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010, MOUSEEVENTF_WHEEL = 0x0800
+            // MOUSEEVENTF_ABSOLUTE = 0x8000 (Uses 0-65535 grid)
 
             if (data.type === 'click' || data.type === 'right-click' || data.type === 'mousedown' || data.type === 'mouseup') {
                 const isRight = data.type === 'right-click' || (data.button === 'right');
 
+                // Scale coordinates to 0-65535 range for ABSOLUTE movement
+                const absX = Math.round(data.x * 65535);
+                const absY = Math.round(data.y * 65535);
+
                 psScript = `
-                    $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo); [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int X, int Y);';
-                    $type = Add-Type -MemberDefinition $code -Name Win32 -Namespace Native -PassThru;
-                    [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
-                    $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
-                    $targetX = [int]($screen.Bounds.Width * ${data.x});
-                    $targetY = [int]($screen.Bounds.Height * ${data.y});
-                    [Native.Win32]::SetCursorPos($targetX, $targetY);
+                    $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
+                    if (-not ([System.Management.Automation.PSTypeName]'Native.Win32').Type) {
+                        Add-Type -MemberDefinition $code -Name Win32 -Namespace Native;
+                    }
+                    
+                    # Move to absolute position (0x8001 = MOVE | ABSOLUTE)
+                    [Native.Win32]::mouse_event(0x8001, ${absX}, ${absY}, 0, 0);
                 `;
 
                 if (data.type === 'click') {
@@ -163,22 +168,26 @@ class StreamManager {
                 const delta = data.delta || 0;
                 psScript = `
                     $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
-                    Add-Type -MemberDefinition $code -Name Win32Scroll -Namespace Native;
+                    if (-not ([System.Management.Automation.PSTypeName]'Native.Win32Scroll').Type) {
+                        Add-Type -MemberDefinition $code -Name Win32Scroll -Namespace Native;
+                    }
                     [Native.Win32Scroll]::mouse_event(0x0800, 0, 0, ${-delta}, 0);
                 `;
             } else if (data.type === 'keydown') {
                 psScript = `[Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; [System.Windows.Forms.SendKeys]::SendWait('${data.key}')`;
             } else if (data.type === 'text') {
-                const safeText = data.text.replace(/'/g, "''");
+                const safeText = data.text.replace(/'/g, "''").replace(/\\/g, "\\\\");
                 psScript = `[Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; [System.Windows.Forms.SendKeys]::SendWait('${safeText}')`;
             }
 
             if (psScript) {
                 const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-                exec(psCommand);
+                exec(psCommand, (err) => {
+                    if (err) console.error('[RemoteInput] PowerShell Error:', err.message);
+                });
             }
         } catch (err) {
-            console.error('[RemoteInput] Error:', err.message);
+            console.error('[RemoteInput] Fatal Error:', err.message);
         }
     }
 
