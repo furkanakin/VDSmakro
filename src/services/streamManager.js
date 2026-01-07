@@ -1,4 +1,4 @@
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 
@@ -13,12 +13,46 @@ class StreamManager {
             fps: 5
         };
 
-        // Resolution mapping
         this.resolutions = {
             '540p': { w: 960, h: 540 },
             '720p': { w: 1280, h: 720 },
             '1080p': { w: 1920, h: 1080 }
         };
+
+        this.psProcess = null;
+        this.initPersistentPS();
+    }
+
+    initPersistentPS() {
+        if (this.psProcess) return;
+
+        console.log('[StreamManager] Initializing persistent PowerShell process...');
+        this.psProcess = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
+            stdio: ['pipe', 'pipe', 'inherit']
+        });
+
+        // Add Win32 mouse_event definition ONCE
+        const initScript = `
+            Add-Type -MemberDefinition @'
+                [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, uint dwExtraInfo);
+                [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+'@ -Name Win32 -Namespace Native
+            [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
+            [Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null
+            Write-Host "PS_READY"
+        `;
+        this.psProcess.stdin.write(initScript + "\n");
+
+        this.psProcess.on('exit', () => {
+            console.log('[StreamManager] Persistent PS exited, restarting...');
+            this.psProcess = null;
+            setTimeout(() => this.initPersistentPS(), 1000);
+        });
+    }
+
+    runPS(script) {
+        if (!this.psProcess) return;
+        this.psProcess.stdin.write(script + "\n");
     }
 
     setSocket(socket) {
@@ -40,7 +74,6 @@ class StreamManager {
         }
 
         if (changed && this.isStreaming) {
-            console.log('[StreamManager] Settings changed, restarting stream...');
             this.stopStream();
             this.startStream();
         }
@@ -56,10 +89,8 @@ class StreamManager {
 
     async captureLoop() {
         if (!this.isStreaming) return;
-
         const startTime = Date.now();
         await this.captureAndSend();
-
         const waitTime = Math.max(0, (1000 / this.settings.fps) - (Date.now() - startTime));
         this.interval = setTimeout(() => this.captureLoop(), waitTime);
     }
@@ -75,170 +106,87 @@ class StreamManager {
 
     async captureAndSend() {
         if (!this.socket || !this.isStreaming) return;
-
         try {
             const res = this.resolutions[this.settings.quality] || this.resolutions['540p'];
-
-            // Robust screen capture with scaling
             const psScript = `
-                [Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null;
-                [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
                 try {
                     $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
                     $fullBmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
                     $gFull = [System.Drawing.Graphics]::FromImage($fullBmp);
                     $gFull.CopyFromScreen(0, 0, 0, 0, $fullBmp.Size);
-                    
                     $bmp = New-Object System.Drawing.Bitmap(${res.w}, ${res.h});
                     $g = [System.Drawing.Graphics]::FromImage($bmp);
                     $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low;
                     $g.DrawImage($fullBmp, 0, 0, ${res.w}, ${res.h});
-                    
                     $ms = New-Object System.IO.MemoryStream;
                     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
-                    [Convert]::ToBase64String($ms.ToArray());
-                    
-                    $g.Dispose();
-                    $bmp.Dispose();
-                    $gFull.Dispose();
-                    $fullBmp.Dispose();
-                    $ms.Dispose();
-                } catch {
-                    "ERROR: " + $_.Exception.Message
-                }
+                    $base64 = [Convert]::ToBase64String($ms.ToArray());
+                    $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
+                    $base64
+                } catch { "ERROR" }
             `;
-
             const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-
-            // Use smaller maxBuffer and timeout for safety
-            const { stdout } = await execAsync(psCommand, {
-                maxBuffer: 1024 * 1024 * 10,
-                timeout: 5000
-            });
+            const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 10, timeout: 5000 });
             const output = stdout.trim();
 
-            if (output && !output.startsWith('ERROR:')) {
+            if (output && output !== 'ERROR') {
                 this.socket.emit('macro:stream_frame', {
                     serverId: this.serverId,
                     image: `data:image/jpeg;base64,${output}`
                 });
             }
-        } catch (err) {
-            // Silently ignore or log occasionally
-        }
+        } catch (err) { }
     }
 
-    async handleRemoteInput(data) {
-        if (!this.inputQueue) this.inputQueue = [];
-
-        // Prevent queue bloat
-        if (this.inputQueue.length > 10) {
-            console.warn('[RemoteInput] Queue too large, skipping event:', data.type);
-            return;
-        }
-
-        this.inputQueue.push(data);
-        this.processInputQueue();
-    }
-
-    async processInputQueue() {
-        if (this.isProcessingInput || this.inputQueue.length === 0) return;
-        this.isProcessingInput = true;
-
-        const data = this.inputQueue.shift();
+    handleRemoteInput(data) {
+        if (!this.psProcess) return;
 
         try {
-            console.log(`[RemoteInput] Processing event: ${data.type} (x: ${data.x}, y: ${data.y})`);
-            let psScript = '';
-
-            // Win32 Constants
-            // MOUSEEVENTF_MOVE = 0x0001, MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
-            // MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010, MOUSEEVENTF_WHEEL = 0x0800
-            // MOUSEEVENTF_ABSOLUTE = 0x8000 (Uses 0-65535 grid)
-
+            let script = '';
             if (data.type === 'click' || data.type === 'right-click' || data.type === 'mousedown' || data.type === 'mouseup') {
                 const isRight = data.type === 'right-click' || (data.button === 'right');
-
-                // Scale coordinates to 0-65535 range for ABSOLUTE movement
                 const absX = Math.round(data.x * 65535);
                 const absY = Math.round(data.y * 65535);
-
-                psScript = `
-                    $code = '[DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
-                    if (-not ([System.Management.Automation.PSTypeName]'Native.Win32').Type) {
-                        Add-Type -MemberDefinition $code -Name Win32 -Namespace Native;
-                    }
-                `;
-
-                // MOUSEEVENTF_MOVE = 0x0001, MOUSEEVENTF_ABSOLUTE = 0x8000
-                // MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
-                // MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010
-
                 let flags = 0x8001; // MOVE | ABSOLUTE
+                if (data.type === 'click') flags |= 0x0006;
+                else if (data.type === 'right-click') flags |= 0x0018;
+                else if (data.type === 'mousedown') flags |= isRight ? 0x0008 : 0x0002;
+                else if (data.type === 'mouseup') flags |= isRight ? 0x0010 : 0x0004;
 
-                if (data.type === 'click') {
-                    flags |= 0x0006; // LEFTDOWN | LEFTUP
-                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
-                } else if (data.type === 'right-click') {
-                    flags |= 0x0018; // RIGHTDOWN | RIGHTUP
-                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
-                } else if (data.type === 'mousedown') {
-                    flags |= isRight ? 0x0008 : 0x0002;
-                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
-                } else if (data.type === 'mouseup') {
-                    flags |= isRight ? 0x0010 : 0x0004;
-                    psScript += ` [Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0); `;
-                }
+                script = `[Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0)`;
             } else if (data.type === 'scroll') {
-                const delta = data.delta || 0;
-                psScript = `
-                    $code = '[DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
-                    if (-not ([System.Management.Automation.PSTypeName]'Native.Win32Scroll').Type) {
-                        Add-Type -MemberDefinition $code -Name Win32Scroll -Namespace Native;
-                    }
-                    [Native.Win32Scroll]::mouse_event(0x0800, 0, 0, ${-delta}, 0);
-                `;
+                const delta = Math.round(data.delta || 0);
+                script = `[Native.Win32]::mouse_event(0x0800, 0, 0, ${-delta}, 0)`;
             } else if (data.type === 'keydown') {
-                psScript = `[Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; [System.Windows.Forms.SendKeys]::SendWait('${data.key}')`;
+                script = `[System.Windows.Forms.SendKeys]::SendWait('${data.key}')`;
             } else if (data.type === 'text') {
                 const safeText = data.text.replace(/'/g, "''").replace(/\\/g, "\\\\");
-                psScript = `[Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; [System.Windows.Forms.SendKeys]::SendWait('${safeText}')`;
+                script = `[System.Windows.Forms.SendKeys]::SendWait('${safeText}')`;
             }
 
-            if (psScript) {
-                const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-                await execAsync(psCommand, { timeout: 3000 });
+            if (script) {
+                this.runPS(script);
             }
         } catch (err) {
-            console.error(`[RemoteInput] Error (${data.type}):`, err.message);
-        } finally {
-            this.isProcessingInput = false;
-            // Process next in queue
-            setImmediate(() => this.processInputQueue());
+            console.error('[RemoteInput] Error:', err.message);
         }
     }
 
     async getScreenshot() {
         try {
             const psScript = `
-                [Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null;
-                [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
                 $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
                 $bmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
                 $g = [System.Drawing.Graphics]::FromImage($bmp);
                 $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size);
                 $ms = New-Object System.IO.MemoryStream;
                 $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg);
-                [Convert]::ToBase64String($ms.ToArray());
-                $g.Dispose();
-                $bmp.Dispose();
-                $ms.Dispose();
+                $base64 = [Convert]::ToBase64String($ms.ToArray());
+                $g.Dispose(); $bmp.Dispose(); $ms.Dispose();
+                $base64
             `;
             const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
-            const { stdout } = await execAsync(psCommand, {
-                maxBuffer: 1024 * 1024 * 10,
-                timeout: 5000
-            });
+            const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 10, timeout: 5000 });
             return `data:image/jpeg;base64,${stdout.trim()}`;
         } catch (e) {
             return null;
