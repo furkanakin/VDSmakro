@@ -146,7 +146,7 @@ class StreamManager {
                 const absY = Math.round(data.y * 65535);
 
                 psScript = `
-                    $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
+                    $code = '[DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
                     if (-not ([System.Management.Automation.PSTypeName]'Native.Win32').Type) {
                         Add-Type -MemberDefinition $code -Name Win32 -Namespace Native;
                     }
@@ -167,7 +167,7 @@ class StreamManager {
             } else if (data.type === 'scroll') {
                 const delta = data.delta || 0;
                 psScript = `
-                    $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
+                    $code = '[DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
                     if (-not ([System.Management.Automation.PSTypeName]'Native.Win32Scroll').Type) {
                         Add-Type -MemberDefinition $code -Name Win32Scroll -Namespace Native;
                     }
