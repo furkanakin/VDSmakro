@@ -1,4 +1,5 @@
 const io = require('socket.io-client');
+const axios = require('axios');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs-extra');
@@ -119,6 +120,10 @@ class SocketClient {
         this.socket.on('macro:get_screenshot', async () => {
             const image = await streamManager.getScreenshot();
             this.socket.emit('macro:screenshot', { serverId: this.serverId, image });
+        });
+
+        this.socket.on('macro:remote_input', (data) => {
+            streamManager.handleRemoteInput(data);
         });
     }
 
