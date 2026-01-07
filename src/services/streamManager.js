@@ -25,18 +25,13 @@ class StreamManager {
     initPersistentPS() {
         if (this.psProcess) return;
 
-        console.log('[StreamManager] Initializing persistent PowerShell process...');
+        console.log('[StreamManager] Initializing persistent PowerShell process for screens...');
         this.psProcess = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
             stdio: ['pipe', 'pipe', 'pipe']
         });
 
-        // Add Win32 mouse_event definition ONCE
         const initScript = `
             $ErrorActionPreference = "SilentlyContinue"
-            Add-Type -MemberDefinition @'
-                [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, uint dwExtraInfo);
-                [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-'@ -Name Win32 -Namespace Native
             [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
             [Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null
             Write-Host "PS_READY"
@@ -50,8 +45,27 @@ class StreamManager {
         this.psProcess.on('exit', () => {
             console.log('[StreamManager] Persistent PS exited, restarting...');
             this.psProcess = null;
-            setTimeout(() => this.initPersistentPS(), 1000);
+            setTimeout(() => this.initPersistentPS(), 2000);
         });
+
+        this.getScreenResolution(); // Pre-cache resolution
+    }
+
+    async getScreenResolution() {
+        if (this.screenRes) return this.screenRes;
+        try {
+            const cmd = 'powershell -NoProfile -Command "[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height"';
+            const { stdout } = await execAsync(cmd);
+            const lines = stdout.trim().split(/\s+/);
+            if (lines.length >= 2) {
+                this.screenRes = { w: parseInt(lines[0]), h: parseInt(lines[1]) };
+                console.log(`[StreamManager] Detected resolution: ${this.screenRes.w}x${this.screenRes.h}`);
+                return this.screenRes;
+            }
+        } catch (e) {
+            console.error('[StreamManager] Failed to get resolution:', e.message);
+        }
+        return { w: 1920, h: 1080 }; // Fallback
     }
 
     runPS(script) {
@@ -130,9 +144,9 @@ class StreamManager {
 
         return new Promise((resolve) => {
             const timeout = setTimeout(() => {
-                this.psProcess.stdout.removeListener('data', onData);
+                this.psProcess.stdout.removeAllListeners('data');
                 resolve(null);
-            }, 5000);
+            }, 3000);
 
             let buffer = '';
             const onData = (data) => {
@@ -175,34 +189,38 @@ class StreamManager {
         });
     }
 
-    handleRemoteInput(data) {
-        if (!this.psProcess) return;
-
+    async handleRemoteInput(data) {
         try {
-            let script = '';
-            if (data.type === 'click' || data.type === 'right-click' || data.type === 'mousedown' || data.type === 'mouseup') {
-                const isRight = data.type === 'right-click' || (data.button === 'right');
-                const absX = Math.round(data.x * 65535);
-                const absY = Math.round(data.y * 65535);
-                let flags = 0x8001; // MOVE | ABSOLUTE
-                if (data.type === 'click') flags |= 0x0006;
-                else if (data.type === 'right-click') flags |= 0x0018;
-                else if (data.type === 'mousedown') flags |= isRight ? 0x0008 : 0x0002;
-                else if (data.type === 'mouseup') flags |= isRight ? 0x0010 : 0x0004;
+            const res = await this.getScreenResolution();
+            const processedData = { ...data };
 
-                script = `[Native.Win32]::mouse_event(${flags}, ${absX}, ${absY}, 0, 0)`;
-            } else if (data.type === 'scroll') {
-                const delta = Math.round(data.delta || 0);
-                script = `[Native.Win32]::mouse_event(0x0800, 0, 0, ${-delta}, 0)`;
-            } else if (data.type === 'keydown') {
-                script = `[System.Windows.Forms.SendKeys]::SendWait('${data.key}')`;
-            } else if (data.type === 'text') {
-                const safeText = data.text.replace(/'/g, "''").replace(/\\/g, "\\\\");
-                script = `[System.Windows.Forms.SendKeys]::SendWait('${safeText}')`;
+            if (data.x !== undefined && data.y !== undefined) {
+                processedData.x = Math.round(data.x * res.w);
+                processedData.y = Math.round(data.y * res.h);
             }
 
-            if (script) {
-                this.runPS(script);
+            const scriptPath = path.join(__dirname, 'input_control.py');
+            const payload = JSON.stringify(processedData);
+
+            const tryExecute = (cmd) => {
+                return new Promise((resolve, reject) => {
+                    const pyProc = spawn(cmd, [scriptPath, payload]);
+                    pyProc.on('error', (err) => reject(err));
+                    pyProc.on('close', (code) => {
+                        if (code === 0) resolve();
+                        else reject(new Error(`Exit code ${code}`));
+                    });
+                });
+            };
+
+            try {
+                await tryExecute('python');
+            } catch (err) {
+                try {
+                    await tryExecute('py');
+                } catch (err2) {
+                    console.error('[RemoteInput] Python/Py failed. Make sure Python is installed.');
+                }
             }
         } catch (err) {
             console.error('[RemoteInput] Error:', err.message);
@@ -210,7 +228,8 @@ class StreamManager {
     }
 
     async getScreenshot() {
-        return this.psRequestScreenshot(1920, 1080); // Default for single shots
+        const res = await this.getScreenResolution();
+        return this.psRequestScreenshot(res.w, res.h);
     }
 }
 
