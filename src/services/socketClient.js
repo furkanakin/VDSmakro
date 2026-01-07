@@ -109,11 +109,24 @@ class SocketClient {
 
         this.socket.on('macro:get_details', async () => {
             const sessions = await this.getSessions();
+            const processes = Array.from(processManager.activeProcesses.values()).map(p => {
+                const elapsed = Date.now() - p.startTime;
+                const remainingMs = Math.max(0, p.duration - elapsed);
+                const mins = Math.floor(remainingMs / 60000);
+                const secs = Math.floor((remainingMs % 60000) / 1000);
+                return {
+                    pid: p.pid,
+                    phoneNumber: p.phoneNumber,
+                    accountName: p.phoneNumber,
+                    remainingTime: `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+                };
+            });
+
             this.socket.emit('macro:node_details', {
                 serverId: this.serverId,
                 details: {
                     accounts: sessions.map(s => ({ phone_number: s, is_active: true })),
-                    activeProcesses: processManager.activeProcesses.size,
+                    activeProcesses: processes,
                     disk: await this.getDiskInfo()
                 }
             });
