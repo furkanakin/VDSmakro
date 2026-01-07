@@ -33,20 +33,31 @@ class Bootstrapper {
             const { version: currentVersion } = require('../../package.json');
             console.log(`[Bootstrap] Current version: v${currentVersion}. Checking for updates...`);
 
-            const response = await axios.get(this.githubPackageUrl);
+            // Add timestamp to bypass GitHub cache
+            const response = await axios.get(`${this.githubPackageUrl}?t=${Date.now()}`);
             const remoteVersion = response.data.version;
 
             console.log(`[Bootstrap] Remote version: v${remoteVersion}`);
 
-            if (remoteVersion !== currentVersion) {
+            if (this.isNewer(remoteVersion, currentVersion)) {
                 console.log('[Bootstrap] A newer version is available. Starting automatic update...');
                 await this.updateFromGithub(false); // Not forced, just standard update
             } else {
-                console.log('[Bootstrap] Already up to date.');
+                console.log('[Bootstrap] Already up to date or local version is newer.');
             }
         } catch (err) {
             console.error('[Bootstrap] Failed to check for updates:', err.message);
         }
+    }
+
+    isNewer(remote, local) {
+        const r = remote.split('.').map(Number);
+        const l = local.split('.').map(Number);
+        for (let i = 0; i < 3; i++) {
+            if (r[i] > l[i]) return true;
+            if (r[i] < l[i]) return false;
+        }
+        return false;
     }
 
     async setupTelegram() {
