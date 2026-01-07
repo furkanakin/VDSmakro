@@ -218,30 +218,40 @@ class SocketClient {
 
     async getCpuUsage() {
         return new Promise((resolve) => {
-            const { exec } = require('child_process');
-            exec('powershell -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"', (err, stdout) => {
-                if (err) return resolve(0);
-                resolve(parseFloat(stdout) || 0);
-            });
+            try {
+                const { exec } = require('child_process');
+                exec('powershell -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"', (err, stdout) => {
+                    if (err) return resolve(0);
+                    resolve(parseFloat(stdout) || 0);
+                });
+            } catch (e) {
+                console.error('[Socket] getCpuUsage spawn error:', e.message);
+                resolve(0);
+            }
         });
     }
 
     async getDiskInfo() {
         return new Promise((resolve) => {
-            const { exec } = require('child_process');
-            exec('powershell -Command "Get-PSDrive C | Select-Object @{Name=\'Total\';Expression={($_.Used + $_.Free) / 1GB}}, @{Name=\'Free\';Expression={$_.Free / 1GB}} | ConvertTo-Json"', (err, stdout) => {
-                if (err) return resolve({ total: 0, free: 0, used: 0, percent: 0 });
-                try {
-                    const data = JSON.parse(stdout);
-                    const total = Math.round(data.Total);
-                    const free = Math.round(data.Free);
-                    const used = total - free;
-                    const percent = Math.round((used / total) * 100);
-                    resolve({ total, free, used, percent });
-                } catch (e) {
-                    resolve({ total: 0, free: 0, used: 0, percent: 0 });
-                }
-            });
+            try {
+                const { exec } = require('child_process');
+                exec('powershell -Command "Get-PSDrive C | Select-Object @{Name=\'Total\';Expression={($_.Used + $_.Free) / 1GB}}, @{Name=\'Free\';Expression={$_.Free / 1GB}} | ConvertTo-Json"', (err, stdout) => {
+                    if (err) return resolve({ total: 0, free: 0, used: 0, percent: 0 });
+                    try {
+                        const data = JSON.parse(stdout);
+                        const total = Math.round(data.Total);
+                        const free = Math.round(data.Free);
+                        const used = total - free;
+                        const percent = Math.round((used / total) * 100);
+                        resolve({ total, free, used, percent });
+                    } catch (e) {
+                        resolve({ total: 0, free: 0, used: 0, percent: 0 });
+                    }
+                });
+            } catch (e) {
+                console.error('[Socket] getDiskInfo spawn error:', e.message);
+                resolve({ total: 0, free: 0, used: 0, percent: 0 });
+            }
         });
     }
 }
