@@ -30,9 +30,11 @@ class ProcessManager {
         if (maxProc) this.settings.maxProcesses = parseInt(maxProc);
         if (rotInt) {
             this.settings.rotationInterval = parseInt(rotInt);
-            if (this.rotationEnabled) {
-                this.stopRotation();
+            // If interval > 0, assume rotation should be enabled
+            if (this.settings.rotationInterval > 0) {
                 this.startRotation();
+            } else {
+                this.stopRotation();
             }
         }
         if (wMin) this.settings.warmupMin = parseInt(wMin) * 60 * 1000;
@@ -102,6 +104,12 @@ class ProcessManager {
             this.activeProcesses.set(child.pid, processInfo);
             console.log(`[ProcessManager] Started PID ${child.pid} for ${duration / 60000} minutes`);
 
+            // Auto-Maximize after launch
+            setTimeout(() => {
+                const maximizeCmd = `powershell -command "$p = Get-Process -Id ${child.pid} -ErrorAction SilentlyContinue; if ($p) { $ws = Add-Type -MemberDefinition '[DllImport(\\"user32.dll\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);' -Name Win32ShowWindow -PassThru; $ws::ShowWindow($p.MainWindowHandle, 3); }"`;
+                exec(maximizeCmd);
+            }, 2000);
+
             return { success: true, pid: child.pid };
         } catch (err) {
             console.error('[ProcessManager] Launch error:', err);
@@ -120,6 +128,7 @@ class ProcessManager {
     }
 
     startRotation() {
+        if (this.rotationInterval) clearInterval(this.rotationInterval);
         this.rotationEnabled = true;
         const intervalMs = this.settings.rotationInterval * 1000;
         this.rotationInterval = setInterval(() => this.rotateWindows(), intervalMs);
@@ -139,26 +148,27 @@ class ProcessManager {
         if (!this.rotationEnabled || this.activeProcesses.size === 0) return;
 
         try {
-            // Get all running Telegram processes from OS
-            exec('powershell -command "Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"', (err, stdout) => {
+            // Get all running Telegram processes from OS, sorted by ID for consistent rotation
+            exec('powershell -command "Get-Process Telegram -ErrorAction SilentlyContinue | Sort-Object Id | Select-Object -ExpandProperty Id"', (err, stdout) => {
                 if (err || !stdout) return;
 
                 const pids = stdout.trim().split(/\s+/).map(p => parseInt(p)).filter(n => !isNaN(n));
                 if (pids.length === 0) return;
 
-                // Randomly pick one that isn't the last one (if more than 1)
-                let targetPid;
-                if (pids.length > 1) {
-                    const filtered = pids.filter(p => p !== this.lastFocusedPid);
-                    targetPid = filtered[Math.floor(Math.random() * filtered.length)];
-                } else {
-                    targetPid = pids[0];
+                // Deterministic rotation: find next in list
+                let nextIndex = 0;
+                if (this.lastFocusedPid) {
+                    const lastIdx = pids.indexOf(this.lastFocusedPid);
+                    if (lastIdx !== -1) {
+                        nextIndex = (lastIdx + 1) % pids.length;
+                    }
                 }
 
+                const targetPid = pids[nextIndex];
                 this.lastFocusedPid = targetPid;
 
-                // Focus command (Minimize -> Maximize -> Switch -> Click)
-                const focusCmd = `powershell -command "$code = '[DllImport(\\"user32.dll\\")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow); [DllImport(\\"user32.dll\\")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab); [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int x, int y); [DllImport(\\"user32.dll\\")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);'; $type = Add-Type -MemberDefinition $code -Name Win32WindowOps -Namespace Win32Functions -PassThru; $p = Get-Process -Id ${targetPid} -ErrorAction SilentlyContinue; if ($p) { $type::ShowWindowAsync($p.MainWindowHandle, 6); Start-Sleep -Milliseconds 250; $type::ShowWindowAsync($p.MainWindowHandle, 3); $type::SwitchToThisWindow($p.MainWindowHandle, $true); Start-Sleep -Milliseconds 150; $type::SetCursorPos(41, 53); $type::mouse_event(0x02, 0, 0, 0, 0); $type::mouse_event(0x04, 0, 0, 0, 0); }"`;
+                // Focus command (Minimize -> Maximize -> Switch -> Wait 1s -> Click Menu at 41,53)
+                const focusCmd = `powershell -command "$code = '[DllImport(\\"user32.dll\\")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow); [DllImport(\\"user32.dll\\")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab); [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int x, int y); [DllImport(\\"user32.dll\\")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);'; $type = Add-Type -MemberDefinition $code -Name Win32WindowOps -Namespace Win32Functions -PassThru; $p = Get-Process -Id ${targetPid} -ErrorAction SilentlyContinue; if ($p) { $type::ShowWindowAsync($p.MainWindowHandle, 6); Start-Sleep -Milliseconds 250; $type::ShowWindowAsync($p.MainWindowHandle, 3); $type::SwitchToThisWindow($p.MainWindowHandle, $true); Start-Sleep -Seconds 1; $type::SetCursorPos(41, 53); $type::mouse_event(0x02, 0, 0, 0, 0); $type::mouse_event(0x04, 0, 0, 0, 0); }"`;
                 exec(focusCmd);
             });
         } catch (e) {
