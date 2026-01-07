@@ -128,7 +128,7 @@ class StreamManager {
             $enc = [System.Drawing.Imaging.Encoder]::Quality;
             $encParams = New-Object System.Drawing.Imaging.EncoderParameters(1);
             $encParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter($enc, 50);
-            $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.FormatDescription -eq "JPEG" };
+            $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.FormatDescription -eq 'JPEG' };
             $bmp.Save($ms, $codec, $encParams);
             $base64 = [Convert]::ToBase64String($ms.ToArray());
             $g.Dispose(); $bmp.Dispose(); $gFull.Dispose(); $fullBmp.Dispose(); $ms.Dispose();
