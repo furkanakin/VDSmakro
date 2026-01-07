@@ -91,7 +91,7 @@ class SocketClient {
 
                     case 'update_agent':
                         this.sendLog('Sistem güncellemesi bașlatıldı. Program indiriliyor ve yeniden bașlatılacak...', 'success');
-                        const updateRes = await bootstrapper.updateFromGithub();
+                        const updateRes = await bootstrapper.updateFromGithub(true); // Force update
                         if (!updateRes) {
                             this.sendLog('Hata: Güncelleme bașarısız oldu.', 'error');
                         }

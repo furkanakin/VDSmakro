@@ -8,6 +8,7 @@ class Bootstrapper {
         this.basePath = path.join(__dirname, '../../');
         this.telegramZipUrl = 'https://telegram.org/dl/desktop/win64_portable';
         this.githubRepoUrl = 'https://github.com/furkanakin/VDSmakro/archive/refs/heads/main.zip';
+        this.githubPackageUrl = 'https://raw.githubusercontent.com/furkanakin/VDSmakro/main/package.json';
     }
 
     async bootstrap() {
@@ -21,10 +22,31 @@ class Bootstrapper {
         // 2. Download and Setup Telegram Portable
         await this.setupTelegram();
 
-        // 3. Check for app updates (optional logic, can be extended)
-        // Since we are running the program, "updating" might involve a restart.
-        // For now, let's implement the download logic as requested.
+        // 3. Check for app updates
+        await this.checkForUpdates();
+
         console.log('[Bootstrap] Initialization complete.');
+    }
+
+    async checkForUpdates() {
+        try {
+            const { version: currentVersion } = require('../../package.json');
+            console.log(`[Bootstrap] Current version: v${currentVersion}. Checking for updates...`);
+
+            const response = await axios.get(this.githubPackageUrl);
+            const remoteVersion = response.data.version;
+
+            console.log(`[Bootstrap] Remote version: v${remoteVersion}`);
+
+            if (remoteVersion !== currentVersion) {
+                console.log('[Bootstrap] A newer version is available. Starting automatic update...');
+                await this.updateFromGithub(false); // Not forced, just standard update
+            } else {
+                console.log('[Bootstrap] Already up to date.');
+            }
+        } catch (err) {
+            console.error('[Bootstrap] Failed to check for updates:', err.message);
+        }
     }
 
     async setupTelegram() {
@@ -77,7 +99,10 @@ class Bootstrapper {
         }
     }
 
-    async updateFromGithub() {
+    async updateFromGithub(isForced = true) {
+        if (isForced) {
+            console.log('[Bootstrap] Force update triggered from Master...');
+        }
         console.log('[Bootstrap] Downloading updates from GitHub...');
         const zipPath = path.join(this.basePath, 'data/update.zip');
 

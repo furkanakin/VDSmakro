@@ -17,12 +17,7 @@ async function main() {
         // 1. Run bootstrap (Setup Telegram & Check for updates)
         await bootstrapper.bootstrap();
 
-        // 2. Perform GitHub update if needed
-        // Note: In a real scenario, an update might require a process restart.
-        // For this version, we'll download files as requested.
-        await bootstrapper.updateFromGithub();
-
-        // 3. Connect to Master Server
+        // 2. Connect to Master Server
         const managerUrl = process.env.MANAGER_URL || 'https://bot.takeyourpart.com';
         socketClient.connect(managerUrl);
 
