@@ -47,19 +47,27 @@ class StreamManager {
         console.log('[StreamManager] Current settings:', this.settings);
     }
 
-    startStream() {
+    async startStream() {
         if (this.isStreaming) return;
         this.isStreaming = true;
-
-        const intervalMs = 1000 / this.settings.fps;
-        this.interval = setInterval(() => this.captureAndSend(), intervalMs);
         console.log(`[StreamManager] Stream started: ${this.settings.quality} @ ${this.settings.fps} FPS`);
+        this.captureLoop();
+    }
+
+    async captureLoop() {
+        if (!this.isStreaming) return;
+
+        const startTime = Date.now();
+        await this.captureAndSend();
+
+        const waitTime = Math.max(0, (1000 / this.settings.fps) - (Date.now() - startTime));
+        this.interval = setTimeout(() => this.captureLoop(), waitTime);
     }
 
     stopStream() {
         this.isStreaming = false;
         if (this.interval) {
-            clearInterval(this.interval);
+            clearTimeout(this.interval);
             this.interval = null;
         }
         console.log('[StreamManager] Stream stopped');
@@ -102,7 +110,11 @@ class StreamManager {
 
             const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`;
 
-            const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 15 });
+            // Use smaller maxBuffer and timeout for safety
+            const { stdout } = await execAsync(psCommand, {
+                maxBuffer: 1024 * 1024 * 10,
+                timeout: 5000
+            });
             const output = stdout.trim();
 
             if (output && !output.startsWith('ERROR:')) {
@@ -120,13 +132,17 @@ class StreamManager {
         try {
             let psScript = '';
 
-            if (data.type === 'click' || data.type === 'mousedown' || data.type === 'mouseup') {
-                const btn = data.button === 'right' ? 'Right' : 'Left';
-                const action = data.type === 'mousedown' ? 'Down' : (data.type === 'mouseup' ? 'Up' : 'Click');
+            // Common Win32 Mouse Event Constants
+            // MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004
+            // MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010
+            // MOUSEEVENTF_WHEEL = 0x0800
+
+            if (data.type === 'click' || data.type === 'right-click' || data.type === 'mousedown' || data.type === 'mouseup') {
+                const isRight = data.type === 'right-click' || (data.button === 'right');
 
                 psScript = `
                     $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo); [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int X, int Y);';
-                    Add-Type -MemberDefinition $code -Name Win32 -Namespace Native;
+                    $type = Add-Type -MemberDefinition $code -Name Win32 -Namespace Native -PassThru;
                     [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
                     $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
                     $targetX = [int]($screen.Bounds.Width * ${data.x});
@@ -135,12 +151,21 @@ class StreamManager {
                 `;
 
                 if (data.type === 'click') {
-                    psScript += ` if ('${btn}' -eq 'Left') { [Native.Win32]::mouse_event(0x0002, 0, 0, 0, 0); [Native.Win32]::mouse_event(0x0004, 0, 0, 0, 0); } else { [Native.Win32]::mouse_event(0x0008, 0, 0, 0, 0); [Native.Win32]::mouse_event(0x0010, 0, 0, 0, 0); } `;
+                    psScript += ` [Native.Win32]::mouse_event(0x0002, 0, 0, 0, 0); [Native.Win32]::mouse_event(0x0004, 0, 0, 0, 0); `;
+                } else if (data.type === 'right-click') {
+                    psScript += ` [Native.Win32]::mouse_event(0x0008, 0, 0, 0, 0); [Native.Win32]::mouse_event(0x0010, 0, 0, 0, 0); `;
                 } else if (data.type === 'mousedown') {
-                    psScript += ` if ('${btn}' -eq 'Left') { [Native.Win32]::mouse_event(0x0002, 0, 0, 0, 0); } else { [Native.Win32]::mouse_event(0x0008, 0, 0, 0, 0); } `;
+                    psScript += isRight ? ` [Native.Win32]::mouse_event(0x0008, 0, 0, 0, 0); ` : ` [Native.Win32]::mouse_event(0x0002, 0, 0, 0, 0); `;
                 } else if (data.type === 'mouseup') {
-                    psScript += ` if ('${btn}' -eq 'Left') { [Native.Win32]::mouse_event(0x0004, 0, 0, 0, 0); } else { [Native.Win32]::mouse_event(0x0010, 0, 0, 0, 0); } `;
+                    psScript += isRight ? ` [Native.Win32]::mouse_event(0x0010, 0, 0, 0, 0); ` : ` [Native.Win32]::mouse_event(0x0004, 0, 0, 0, 0); `;
                 }
+            } else if (data.type === 'scroll') {
+                const delta = data.delta || 0;
+                psScript = `
+                    $code = '[DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, uint dwExtraInfo);';
+                    Add-Type -MemberDefinition $code -Name Win32Scroll -Namespace Native;
+                    [Native.Win32Scroll]::mouse_event(0x0800, 0, 0, ${-delta}, 0);
+                `;
             } else if (data.type === 'keydown') {
                 psScript = `[Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; [System.Windows.Forms.SendKeys]::SendWait('${data.key}')`;
             } else if (data.type === 'text') {
