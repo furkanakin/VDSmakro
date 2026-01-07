@@ -35,11 +35,10 @@ class StreamManager {
 
         const initScript = `
             $ErrorActionPreference = "SilentlyContinue"
-            [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null
-            [Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
             Write-Host "PS_READY"
         `;
-        this.psProcess.stdin.write(initScript + "\n");
+        this.psProcess.stdin.write(initScript.trim() + "\n");
 
         this.psProcess.on('exit', () => {
             this.psProcess = null;
@@ -52,7 +51,7 @@ class StreamManager {
     async getScreenResolution() {
         if (this.screenRes) return this.screenRes;
         try {
-            const cmd = 'powershell -NoProfile -Command "[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height"';
+            const cmd = 'powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height"';
             const { stdout } = await execAsync(cmd);
             const lines = stdout.trim().split(/\s+/);
             if (lines.length >= 2) {
@@ -164,6 +163,7 @@ class StreamManager {
 
             const script = `
                 try {
+                    Add-Type -AssemblyName System.Windows.Forms, System.Drawing;
                     $screen = [System.Windows.Forms.Screen]::PrimaryScreen;
                     $fullBmp = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height);
                     $gFull = [System.Drawing.Graphics]::FromImage($fullBmp);
@@ -207,9 +207,10 @@ class StreamManager {
                 const scaleY = data.y <= 1.1 ? res.h : 1;
                 processedData.x = Math.round(data.x * scaleX);
                 processedData.y = Math.round(data.y * scaleY);
+                console.log(`[RemoteInput] Executing ${data.type} at (${processedData.x}, ${processedData.y}) [Raw: ${data.x}, ${data.y}] Resolution: ${res.w}x${res.h}`);
+            } else {
+                console.log(`[RemoteInput] Executing ${data.type} [Data: ${JSON.stringify(data)}] Resolution: ${res.w}x${res.h}`);
             }
-
-            console.log(`[RemoteInput] Executing ${data.type} at (${processedData.x}, ${processedData.y}) [Raw: ${data.x}, ${data.y}] Resolution: ${res.w}x${res.h}`);
 
             const scriptPath = path.join(__dirname, 'input_control.py');
             const payload = JSON.stringify(processedData);
