@@ -38,6 +38,7 @@ class SocketClient {
         });
 
         streamManager.setSocket(this.socket);
+        streamManager.serverId = this.serverId;
 
         this.socket.on('connect', () => {
             console.log('[Socket] Connected to Manager');
@@ -141,8 +142,17 @@ class SocketClient {
 
     async register() {
         const sessions = await this.getSessions();
+        let publicIp = '0.0.0.0';
+        try {
+            const res = await axios.get('https://api.ipify.org');
+            publicIp = res.data;
+        } catch (e) {
+            console.error('[Socket] Failed to get public IP:', e.message);
+        }
+
         const info = {
             id: this.serverId,
+            ip: publicIp, // Crucial for Master identification
             name: os.hostname(),
             platform: os.platform(),
             type: 'macro-node',
@@ -153,12 +163,14 @@ class SocketClient {
 
     startHeartbeat() {
         this.heartbeatInterval = setInterval(async () => {
+            const disk = await this.getDiskInfo();
+            const cpu = await this.getCpuUsage();
             const stats = {
-                cpu: 0, // Simplified for now
+                cpu: Math.round(cpu),
                 ram: Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100),
                 accountCount: (await this.getSessions()).length,
                 telegramCount: processManager.activeProcesses.size,
-                disk: await this.getDiskInfo()
+                disk: disk
             };
             this.socket.emit('macro:heartbeat', stats);
         }, 5000);
@@ -168,9 +180,33 @@ class SocketClient {
         if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     }
 
+    async getCpuUsage() {
+        return new Promise((resolve) => {
+            const { exec } = require('child_process');
+            exec('powershell -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"', (err, stdout) => {
+                if (err) return resolve(0);
+                resolve(parseFloat(stdout) || 0);
+            });
+        });
+    }
+
     async getDiskInfo() {
-        // Simplified disk info for Windows CLI
-        return { total: 0, free: 0, used: 0, percent: 0 };
+        return new Promise((resolve) => {
+            const { exec } = require('child_process');
+            exec('powershell -Command "Get-PSDrive C | Select-Object @{Name=\'Total\';Expression={($_.Used + $_.Free) / 1GB}}, @{Name=\'Free\';Expression={$_.Free / 1GB}} | ConvertTo-Json"', (err, stdout) => {
+                if (err) return resolve({ total: 0, free: 0, used: 0, percent: 0 });
+                try {
+                    const data = JSON.parse(stdout);
+                    const total = Math.round(data.Total);
+                    const free = Math.round(data.Free);
+                    const used = total - free;
+                    const percent = Math.round((used / total) * 100);
+                    resolve({ total, free, used, percent });
+                } catch (e) {
+                    resolve({ total: 0, free: 0, used: 0, percent: 0 });
+                }
+            });
+        });
     }
 }
 

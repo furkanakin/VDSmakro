@@ -58,23 +58,22 @@ class StreamManager {
         if (!this.socket || !this.isStreaming) return;
 
         try {
-            // Using PowerShell for screenshot to avoid external deps
-            // Resizing is done via GDI+ at the source for efficiency
             const res = this.resolutions[this.settings.quality] || this.resolutions['540p'];
 
-            const psCommand = `powershell -command "$code = '[DllImport(\\"user32.dll\\")] public static extern IntPtr GetDesktopWindow(); [DllImport(\\"user32.dll\\")] public static extern IntPtr GetWindowDC(IntPtr hWnd); [DllImport(\\"gdi32.dll\\")] public static extern bool StretchBlt(IntPtr hdcDest, int nXOriginDest, int nYOriginDest, int nWidthDest, int nHeightDest, IntPtr hdcSrc, int nXOriginSrc, int nYOriginSrc, int nWidthSrc, int nHeightSrc, int dwRop);'; Add-Type -MemberDefinition $code -Name Win32 -Namespace Native; [Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; $screen = [System.Windows.Forms.Screen]::PrimaryScreen; $hDesk = [Native.Win32]::GetDesktopWindow(); $hBar = [Native.Win32]::GetWindowDC($hDesk); $bmp = New-Object System.Drawing.Bitmap(${res.w}, ${res.h}); $g = [System.Drawing.Graphics]::FromImage($bmp); $hdc = $g.GetHdc(); [Native.Win32]::StretchBlt($hdc, 0, 0, ${res.w}, ${res.h}, $hBar, 0, 0, $screen.Bounds.Width, $screen.Bounds.Height, 0x00CC0020) | Out-Null; $g.ReleaseHdc($hdc); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); [Convert]::ToBase64String($ms.ToArray()); $g.Dispose(); $bmp.Dispose(); $ms.Dispose();"`;
+            // Use CopyFromScreen which is often more reliable on VPS than direct GDI StretchBlt of DesktopDC
+            const psCommand = `powershell -command "[Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null; [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $screen = [System.Windows.Forms.Screen]::PrimaryScreen; $bmp = New-Object System.Drawing.Bitmap(${res.w}, ${res.h}); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Low; $g.CopyFromScreen(0, 0, 0, 0, $bmp.Size); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg); [Convert]::ToBase64String($ms.ToArray()); $g.Dispose(); $bmp.Dispose(); $ms.Dispose();"`;
 
             const { stdout } = await execAsync(psCommand, { maxBuffer: 1024 * 1024 * 10 });
             const b64 = stdout.trim();
 
             if (b64) {
                 this.socket.emit('macro:stream_frame', {
-                    serverId: this.serverId, // Set by register
+                    serverId: this.serverId,
                     image: `data:image/jpeg;base64,${b64}`
                 });
             }
         } catch (err) {
-            // Silently fail or log occasionally
+            // console.error('[Stream] Capture error:', err.message);
         }
     }
 
