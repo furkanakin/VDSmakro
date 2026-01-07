@@ -18,7 +18,7 @@ async function main() {
         await bootstrapper.updateFromGithub();
 
         // 3. Connect to Master Server
-        const managerUrl = process.env.MANAGER_URL || 'http://localhost:3000';
+        const managerUrl = process.env.MANAGER_URL || 'https://bot.takeyourpart.com';
         socketClient.connect(managerUrl);
 
         console.log('[Main] Agent is running and waiting for commands...');

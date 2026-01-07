@@ -54,8 +54,22 @@ class Bootstrapper {
 
             console.log('[Bootstrap] Extracting Telegram Portable...');
             const zip = new AdmZip(zipPath);
-            zip.extractAllTo(path.join(this.basePath, 'Telegram'), true);
+            const tempExtractPath = path.join(this.basePath, 'data/temp_tg');
+            await fs.ensureDir(tempExtractPath);
+            zip.extractAllTo(tempExtractPath, true);
 
+            // The zip usually contains a "Telegram" folder. Move its contents directly to our target.
+            const internalTgPath = path.join(tempExtractPath, 'Telegram');
+            const targetTgPath = path.join(this.basePath, 'Telegram');
+
+            if (await fs.pathExists(internalTgPath)) {
+                await fs.copy(internalTgPath, targetTgPath, { overwrite: true });
+            } else {
+                // If it doesn't have an internal Telegram folder, copy everything directly
+                await fs.copy(tempExtractPath, targetTgPath, { overwrite: true });
+            }
+
+            await fs.remove(tempExtractPath);
             console.log('[Bootstrap] Telegram Portable setup complete.');
             // await fs.remove(zipPath); // Optional: keep or delete
         } catch (err) {

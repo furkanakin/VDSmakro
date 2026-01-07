@@ -10,7 +10,7 @@ const copierService = require('./copierService');
 class SocketClient {
     constructor() {
         this.socket = null;
-        this.managerUrl = process.env.MANAGER_URL || 'http://localhost:3000';
+        this.managerUrl = process.env.MANAGER_URL || 'https://bot.takeyourpart.com';
         this.serverId = this.loadServerId();
         this.connected = false;
         this.heartbeatInterval = null;
