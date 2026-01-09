@@ -1,4 +1,4 @@
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs-extra');
 
@@ -16,8 +16,41 @@ class ProcessManager {
         this.rotationInterval = null;
         this.lastFocusedPid = null;
 
+        // C# Utility configuration
+        this.helperExe = path.join(__dirname, 'WindowHelper.exe');
+        this.helperSrc = path.join(__dirname, 'WindowHelper.cs');
+        this.ensureHelperTool();
+
         // Check for expired processes every 5 seconds
         this.expirationInterval = setInterval(() => this.checkExpirations(), 5000);
+    }
+
+    /**
+     * Compiles the C# WindowHelper utility if it doesn't exist.
+     * This avoids heavy PowerShell JIT compilation (Add-Type) in loops.
+     */
+    ensureHelperTool() {
+        if (fs.existsSync(this.helperExe)) return true;
+
+        console.log('[ProcessManager] Compiling WindowHelper utility...');
+        const cscPaths = [
+            'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe',
+            'C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'
+        ];
+
+        for (const csc of cscPaths) {
+            if (fs.existsSync(csc)) {
+                try {
+                    const cmd = `"${csc}" /target:exe /out:"${this.helperExe}" "${this.helperSrc}"`;
+                    execSync(cmd);
+                    console.log('[ProcessManager] WindowHelper compiled successfully.');
+                    return true;
+                } catch (e) {
+                    console.error(`[ProcessManager] Compilation failed with ${csc}:`, e.message);
+                }
+            }
+        }
+        return false;
     }
 
     updateSettings(newSettings) {
@@ -47,7 +80,8 @@ class ProcessManager {
         if (!exePath) return false;
         // Escape single quotes for PowerShell
         const safePath = exePath.replace(/'/g, "''");
-        const psCommand = `powershell -command "Get-WmiObject Win32_Process | Where-Object { $_.ExecutablePath -eq '${safePath}' } | Measure-Object | Select-Object -ExpandProperty Count"`;
+        // Get-CimInstance is more efficient than Get-WmiObject
+        const psCommand = `powershell -command "(Get-CimInstance Win32_Process -Filter \\"ExecutablePath = '${safePath}'\\" | Measure-Object).Count"`;
 
         return new Promise((resolve) => {
             exec(psCommand, (err, stdout) => {
@@ -133,10 +167,11 @@ class ProcessManager {
             this.activeProcesses.set(child.pid, processInfo);
             console.log(`[ProcessManager] Started PID ${child.pid} for ${duration / 60000} minutes`);
 
-            // Auto-Maximize after launch
+            // Auto-Maximize after launch using WindowHelper
             setTimeout(() => {
-                const maximizeCmd = `powershell -command "$p = Get-Process -Id ${child.pid} -ErrorAction SilentlyContinue; if ($p) { $ws = Add-Type -MemberDefinition '[DllImport(\\"user32.dll\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);' -Name Win32ShowWindow -PassThru; $ws::ShowWindow($p.MainWindowHandle, 3); }"`;
-                exec(maximizeCmd);
+                if (fs.existsSync(this.helperExe)) {
+                    exec(`"${this.helperExe}" maximize ${child.pid}`);
+                }
             }, 2000);
 
             return { success: true, pid: child.pid };
@@ -177,7 +212,7 @@ class ProcessManager {
         if (!this.rotationEnabled || this.activeProcesses.size === 0) return;
 
         try {
-            // Get all running Telegram processes from OS, sorted by ID for consistent rotation
+            // Get all running Telegram processes from OS
             exec('powershell -command "Get-Process Telegram -ErrorAction SilentlyContinue | Sort-Object Id | Select-Object -ExpandProperty Id"', (err, stdout) => {
                 if (err || !stdout) return;
 
@@ -196,9 +231,11 @@ class ProcessManager {
                 const targetPid = pids[nextIndex];
                 this.lastFocusedPid = targetPid;
 
-                // Focus command (Minimize -> Maximize -> Switch -> Wait 1s -> Click Menu at 41,53)
-                const focusCmd = `powershell -command "$code = '[DllImport(\\"user32.dll\\")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow); [DllImport(\\"user32.dll\\")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab); [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int x, int y); [DllImport(\\"user32.dll\\")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);'; $type = Add-Type -MemberDefinition $code -Name Win32WindowOps -Namespace Win32Functions -PassThru; $p = Get-Process -Id ${targetPid} -ErrorAction SilentlyContinue; if ($p) { $type::ShowWindowAsync($p.MainWindowHandle, 6); Start-Sleep -Milliseconds 250; $type::ShowWindowAsync($p.MainWindowHandle, 3); $type::SwitchToThisWindow($p.MainWindowHandle, $true); Start-Sleep -Seconds 1; $type::SetCursorPos(41, 53); $type::mouse_event(0x02, 0, 0, 0, 0); $type::mouse_event(0x04, 0, 0, 0, 0); }"`;
-                exec(focusCmd);
+                // Use the lightweight WindowHelper for rotation and clicking
+                if (fs.existsSync(this.helperExe)) {
+                    // rotate <pid> <click_x> <click_y>
+                    exec(`"${this.helperExe}" rotate ${targetPid} 41 53`);
+                }
             });
         } catch (e) {
             console.error('[ProcessManager] Rotation error:', e.message);
@@ -219,7 +256,7 @@ class ProcessManager {
             // 2. CRITICAL: Path-based Kill (Guarantee RAM cleanup even if PID changed)
             if (exePath) {
                 const safePath = exePath.replace(/'/g, "''");
-                const psCommand = `powershell -command "Get-WmiObject Win32_Process | Where-Object { $_.ExecutablePath -eq '${safePath}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
+                const psCommand = `powershell -command "Get-CimInstance Win32_Process -Filter \\"ExecutablePath = '${safePath}'\\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
 
                 exec(psCommand, (err) => {
                     if (err) console.log(`[ProcessManager] Path-based kill failed/not found: ${exePath}`);
