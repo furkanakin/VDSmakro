@@ -110,7 +110,38 @@ class SocketClient {
                         this.sendLog(`Sessison senkronize edildi: ${sessions.length} adet.`, 'success');
                         break;
 
+                    case 'cleanup_vds_folders':
+                        logger.info('Master requested VDS folder cleanup');
+                        if (command.validSessions && Array.isArray(command.validSessions)) {
+                            const accountsDir = path.join(__dirname, '../../hesaplar');
+                            if (fs.existsSync(accountsDir)) {
+                                const entries = await fs.readdir(accountsDir, { withFileTypes: true });
+                                const folders = entries.filter(dirent => dirent.isDirectory()).map(dirent => dirent.name);
+
+                                let deletedCount = 0;
+                                const validSet = new Set(command.validSessions.map(s => s.toLowerCase()));
+
+                                for (const folder of folders) {
+                                    if (!validSet.has(folder.toLowerCase())) {
+                                        logger.warn(`Orphaned folder detected: ${folder}. Deleting...`);
+                                        await fs.remove(path.join(accountsDir, folder));
+                                        deletedCount++;
+                                    }
+                                }
+
+                                if (deletedCount > 0) {
+                                    this.sendLog(`${deletedCount} adet geçersiz hesap klasörü temizlendi.`, 'success');
+                                    // Refresh session cache after deletion
+                                    await this.getSessions(true);
+                                } else {
+                                    this.sendLog('Geçersiz klasör bulunamadı.', 'info');
+                                }
+                            }
+                        }
+                        break;
+
                     case 'update_agent':
+
                         logger.info('Master requested agent update');
                         this.sendLog('Sistem güncellemesi bașlatıldı. Program indiriliyor ve yeniden bașlatılacak...', 'success');
                         const updateRes = await bootstrapper.updateFromGithub(true); // Force update
