@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs-extra');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const logger = require('./logger');
 
 class Bootstrapper {
     constructor() {
@@ -12,7 +13,7 @@ class Bootstrapper {
     }
 
     async bootstrap() {
-        console.log('[Bootstrap] Starting initialization sequence...');
+        logger.info('Starting initialization sequence...');
 
         // 1. Ensure essential folders exist
         await fs.ensureDir(path.join(this.basePath, 'data'));
@@ -31,7 +32,7 @@ class Bootstrapper {
     async checkForUpdates() {
         try {
             const { version: currentVersion } = require('../../package.json');
-            console.log(`[Bootstrap] Current version: v${currentVersion}. Checking for updates...`);
+            logger.info(`Current version: v${currentVersion}. Checking for updates...`);
 
             // Add timestamp to bypass GitHub cache
             const response = await axios.get(`${this.githubPackageUrl}?t=${Date.now()}`);

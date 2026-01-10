@@ -8,6 +8,7 @@ const processManager = require('./processManager');
 const streamManager = require('./streamManager');
 const copierService = require('./copierService');
 const bootstrapper = require('./bootstrapper');
+const logger = require('./logger');
 
 class SocketClient {
     constructor() {
@@ -32,7 +33,7 @@ class SocketClient {
     connect(url) {
         if (url) this.managerUrl = url;
 
-        console.log(`[Socket] Connecting to ${this.managerUrl}...`);
+        logger.info(`Connecting to Master: ${this.managerUrl}...`);
 
         this.socket = io(this.managerUrl, {
             reconnection: true,
@@ -43,22 +44,26 @@ class SocketClient {
         streamManager.serverId = this.serverId;
 
         this.socket.on('connect', () => {
-            console.log('[Socket] Connected to Manager');
+            logger.success(`Connected to Master Server: ${this.managerUrl}`);
             this.connected = true;
             this.register();
             this.startHeartbeat();
         });
 
-        this.socket.on('disconnect', () => {
-            console.log('[Socket] Disconnected');
+        this.socket.on('disconnect', (reason) => {
+            logger.warn(`Disconnected from Master: ${reason}`);
             this.connected = false;
             this.stopHeartbeat();
             streamManager.stopStream(); // Ensure stream stops on disconnect
         });
 
+        this.socket.on('connect_error', (err) => {
+            logger.error('Socket connection error:', err);
+        });
+
         // Remote Commands
         this.socket.on('macro:command', async (command) => {
-            console.log('[Socket] Received command:', command.type);
+            logger.info(`Received command: ${command.type} ${command.phoneNumber || ''}`);
 
             try {
                 switch (command.type) {
@@ -79,38 +84,45 @@ class SocketClient {
 
                     case 'kill_telegram':
                     case 'kill_all_telegram':
+                        logger.info('Master requested to kill all Telegram processes');
                         processManager.killAll();
                         this.sendLog('Tüm Telegram süreçleri sonlandırıldı.', 'success');
                         break;
 
                     case 'copy_telegram_exe':
+                        logger.info('Master requested Telegram.exe sync');
                         const result = await copierService.copyTelegramToAccounts();
                         this.sendLog(`Kopyalama tamamlandı: ${result.successful} başarılı, ${result.skipped} atlanan.`, 'success');
                         break;
 
                     case 'minimize_all':
+                        logger.info('Master requested minimize all windows');
                         const { exec } = require('child_process');
                         exec('powershell -Command "(New-Object -ComObject Shell.Application).MinimizeAll()"');
                         break;
 
                     case 'sync_sessions':
+                        logger.info('Master requested session sync');
                         const sessions = await this.getSessions();
                         this.socket.emit('macro:update_sessions', sessions);
                         this.sendLog(`Sessison senkronize edildi: ${sessions.length} adet.`, 'success');
                         break;
 
                     case 'update_agent':
+                        logger.info('Master requested agent update');
                         this.sendLog('Sistem güncellemesi bașlatıldı. Program indiriliyor ve yeniden bașlatılacak...', 'success');
                         const updateRes = await bootstrapper.updateFromGithub(true); // Force update
                         if (!updateRes) {
+                            logger.error('Agent update failed');
                             this.sendLog('Hata: Güncelleme bașarısız oldu.', 'error');
                         }
                         break;
 
                     default:
-                        console.log('[Socket] Unknown command:', command.type);
+                        logger.warn(`Unknown command type received: ${command.type}`);
                 }
             } catch (err) {
+                logger.error(`Command execution failed (${command.type}):`, err);
                 this.sendLog(`Hata: ${err.message}`, 'error');
             }
         });

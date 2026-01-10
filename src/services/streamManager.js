@@ -3,6 +3,7 @@ const util = require('util');
 const execAsync = util.promisify(exec);
 const path = require('path');
 const fs = require('fs');
+const logger = require('./logger');
 
 class StreamManager {
     constructor() {
@@ -168,7 +169,7 @@ class StreamManager {
             const base64 = stdout.trim().replace(/\s/g, '');
             return base64 ? `data:image/jpeg;base64,${base64}` : null;
         } catch (e) {
-            console.error('[StreamManager] Screenshot failed:', e.message);
+            logger.error('Screenshot failed:', e);
             return null;
         }
     }
@@ -223,7 +224,7 @@ class StreamManager {
                 }
             }
         } catch (err) {
-            console.error('[RemoteInput] Error:', err.message);
+            logger.error('Remote input execution failed:', err);
         } finally {
             this.isProcessingInput = false;
             setImmediate(() => this.processInputQueue());

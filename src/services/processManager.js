@@ -1,6 +1,7 @@
 const { spawn, exec, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs-extra');
+const logger = require('./logger');
 
 class ProcessManager {
     constructor() {
@@ -73,7 +74,9 @@ class ProcessManager {
         if (wMin) this.settings.warmupMin = parseInt(wMin) * 60 * 1000;
         if (wMax) this.settings.warmupMax = parseInt(wMax) * 60 * 1000;
 
-        console.log('[ProcessManager] Settings updated:', this.settings);
+        if (wMax) this.settings.warmupMax = parseInt(wMax) * 60 * 1000;
+
+        logger.info(`Settings updated: MaxProcesses=${this.settings.maxProcesses}, Rotation=${this.settings.rotationInterval}s`);
     }
 
     async verifyProcessRunning(exePath) {
@@ -100,35 +103,22 @@ class ProcessManager {
         for (const [pid, proc] of this.activeProcesses) {
             const isActuallyRunning = await this.verifyProcessRunning(proc.exePath);
             if (!isActuallyRunning) {
-                console.log(`[ProcessManager] Stale process detected for ${proc.phoneNumber} (PID: ${pid}). Removing from map.`);
+                logger.warn(`Stale process detected for ${proc.phoneNumber} (PID: ${pid}). Removing from map.`);
                 this.activeProcesses.delete(pid);
             }
         }
 
         // 2. Enforce dynamic limit (FIFO)
-        if (this.activeProcesses.size >= this.settings.maxProcesses) {
-            console.log(`[ProcessManager] Limit of ${this.settings.maxProcesses} reached. Finding oldest to kill...`);
-            let oldestPid = null;
-            let oldestTime = Infinity;
-
-            for (const [pid, proc] of this.activeProcesses) {
-                if (proc.startTime < oldestTime) {
-                    oldestTime = proc.startTime;
-                    oldestPid = pid;
-                }
-            }
-
-            if (oldestPid) {
-                console.log(`[ProcessManager] Killing oldest process (PID: ${oldestPid}) to free slot.`);
-                this.killProcess(oldestPid);
-                await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for cleanup
-            }
+        if (oldestPid) {
+            logger.info(`Limit of ${this.settings.maxProcesses} reached. Killing oldest process (PID: ${oldestPid}) for slot.`);
+            this.killProcess(oldestPid);
+            await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for cleanup
         }
 
         // 3. Check if already running (after safety cleanup)
         for (const [pid, proc] of this.activeProcesses) {
             if (proc.phoneNumber === phoneNumber) {
-                console.log(`[ProcessManager] Telegram already open for ${phoneNumber} (PID: ${pid})`);
+                logger.info(`Telegram already open for ${phoneNumber} (PID: ${pid})`);
                 return { success: true, pid: pid };
             }
         }
@@ -165,18 +155,19 @@ class ProcessManager {
             };
 
             this.activeProcesses.set(child.pid, processInfo);
-            console.log(`[ProcessManager] Started PID ${child.pid} for ${duration / 60000} minutes`);
+            logger.success(`Launched Telegram for ${phoneNumber} (PID: ${child.pid}, Warmup: ${duration / 60000} min)`);
 
             // Auto-Maximize after launch using WindowHelper
             setTimeout(() => {
                 if (fs.existsSync(this.helperExe)) {
+                    logger.info(`Maximizing window for PID ${child.pid}`);
                     exec(`"${this.helperExe}" maximize ${child.pid}`);
                 }
             }, 2000);
 
             return { success: true, pid: child.pid };
         } catch (err) {
-            console.error('[ProcessManager] Launch error:', err);
+            logger.error(`Launch error for ${phoneNumber}:`, err);
             throw err;
         }
     }
@@ -185,7 +176,7 @@ class ProcessManager {
         const now = Date.now();
         for (const [pid, proc] of this.activeProcesses) {
             if (now - proc.startTime > proc.duration) {
-                console.log(`[ProcessManager] Time expired for PID ${pid} (${proc.phoneNumber}). Killing...`);
+                logger.info(`Time expired for ${proc.phoneNumber} (PID: ${pid}). Killing...`);
                 this.killProcess(pid);
             }
         }
@@ -196,7 +187,7 @@ class ProcessManager {
         this.rotationEnabled = true;
         const intervalMs = this.settings.rotationInterval * 1000;
         this.rotationInterval = setInterval(() => this.rotateWindows(), intervalMs);
-        console.log(`[ProcessManager] Rotation started with ${this.settings.rotationInterval}s interval`);
+        logger.info(`Rotation started with ${this.settings.rotationInterval}s interval`);
     }
 
     stopRotation() {
@@ -205,7 +196,7 @@ class ProcessManager {
             clearInterval(this.rotationInterval);
             this.rotationInterval = null;
         }
-        console.log('[ProcessManager] Rotation stopped');
+        logger.info('Rotation stopped');
     }
 
     async rotateWindows() {
@@ -233,12 +224,12 @@ class ProcessManager {
 
                 // Use the lightweight WindowHelper for rotation and clicking
                 if (fs.existsSync(this.helperExe)) {
-                    // rotate <pid> <click_x> <click_y>
+                    logger.info(`Rotating focus to PID: ${targetPid}`);
                     exec(`"${this.helperExe}" rotate ${targetPid} 41 53`);
                 }
             });
         } catch (e) {
-            console.error('[ProcessManager] Rotation error:', e.message);
+            logger.error('Rotation error:', e);
         }
     }
 
@@ -248,7 +239,7 @@ class ProcessManager {
         const { exePath } = proc;
 
         try {
-            console.log(`[ProcessManager] Killing PID ${pid} (${proc.phoneNumber})`);
+            logger.info(`Killing PID ${pid} (${proc.phoneNumber})`);
 
             // 1. Try standard process kill
             try { process.kill(pid); } catch (e) { }
@@ -259,15 +250,14 @@ class ProcessManager {
                 const psCommand = `powershell -command "Get-CimInstance Win32_Process -Filter \\"ExecutablePath = '${safePath}'\\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
 
                 exec(psCommand, (err) => {
-                    if (err) console.log(`[ProcessManager] Path-based kill failed/not found: ${exePath}`);
-                    else console.log(`[ProcessManager] Successfully killed process at path: ${exePath}`);
+                    if (err) logger.warn(`Path-based kill failed: ${exePath}`);
+                    else logger.success(`Successfully killed process at path: ${exePath}`);
                 });
             } else {
-                // Fallback to taskkill if no path stored (backwards compatibility)
                 exec(`taskkill /PID ${pid} /F`);
             }
         } catch (e) {
-            console.error(`[ProcessManager] Kill error for PID ${pid}:`, e.message);
+            logger.error(`Kill error for PID ${pid}:`, e);
         }
 
         this.activeProcesses.delete(pid);
