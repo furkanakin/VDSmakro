@@ -17,6 +17,8 @@ class SocketClient {
         this.serverId = this.loadServerId();
         this.connected = false;
         this.heartbeatInterval = null;
+        this.sessionCache = [];
+        this.lastSessionUpdate = 0;
     }
 
     loadServerId() {
@@ -170,11 +172,29 @@ class SocketClient {
         });
     }
 
-    async getSessions() {
-        const accountsDir = path.join(__dirname, '../../hesaplar');
-        if (!fs.existsSync(accountsDir)) return [];
-        const folders = await fs.readdir(accountsDir);
-        return folders.filter(f => fs.statSync(path.join(accountsDir, f)).isDirectory());
+    async getSessions(forceRefresh = false) {
+        try {
+            const now = Date.now();
+            // Cache for 60 seconds unless forced
+            if (!forceRefresh && this.sessionCache.length > 0 && (now - this.lastSessionUpdate < 60000)) {
+                return this.sessionCache;
+            }
+
+            const accountsDir = path.join(__dirname, '../../hesaplar');
+            if (!fs.existsSync(accountsDir)) return [];
+
+            // Use withFileTypes to avoid separate stat calls, and readdir is async
+            const entries = await fs.readdir(accountsDir, { withFileTypes: true });
+            this.sessionCache = entries
+                .filter(dirent => dirent.isDirectory())
+                .map(dirent => dirent.name);
+
+            this.lastSessionUpdate = now;
+            return this.sessionCache;
+        } catch (err) {
+            logger.error('Session retrieval error:', err);
+            return this.sessionCache || [];
+        }
     }
 
     sendLog(message, type = 'info') {
@@ -248,9 +268,10 @@ class SocketClient {
             };
             this.socket.emit('macro:heartbeat', stats);
 
-            // Sync sessions every 30 seconds (6 * 5s)
-            if (heartbeatCount % 6 === 0) {
-                this.socket.emit('macro:update_sessions', sessions);
+            // Sync sessions every 60 seconds (12 * 5s) instead of 30s
+            // and force a refresh here
+            if (heartbeatCount % 12 === 0) {
+                this.socket.emit('macro:update_sessions', await this.getSessions(true));
             }
         }, 5000);
     }
