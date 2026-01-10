@@ -79,12 +79,32 @@ class ProcessManager {
         logger.info(`Settings updated: MaxProcesses=${this.settings.maxProcesses}, Rotation=${this.settings.rotationInterval}s`);
     }
 
-    async verifyProcessRunning(exePath) {
+    async verifyProcessRunning(exePath, pid) {
         if (!exePath) return false;
         // Escape single quotes for PowerShell
-        const safePath = exePath.replace(/'/g, "''");
-        // Get-CimInstance is more efficient than Get-WmiObject
-        const psCommand = `powershell -command "(Get-CimInstance Win32_Process -Filter \\"ExecutablePath = '${safePath}'\\" | Measure-Object).Count"`;
+        const safePath = exePath.replace(/'/g, "''").toLowerCase();
+
+        return new Promise((resolve) => {
+            // First check by PID for performance if possible
+            if (pid) {
+                const checkPidCmd = `powershell -command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).Id"`;
+                exec(checkPidCmd, (err, stdout) => {
+                    if (!err && stdout && parseInt(stdout.trim()) === pid) {
+                        resolve(true);
+                        return;
+                    }
+                    // If PID check fails, fallback to path-based check
+                    this.verifyByPath(safePath).then(resolve);
+                });
+            } else {
+                this.verifyByPath(safePath).then(resolve);
+            }
+        });
+    }
+
+    async verifyByPath(safePath) {
+        // Get-CimInstance is efficient. We compare lowercase paths to avoid casing issues.
+        const psCommand = `powershell -command "(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLower() -eq '${safePath}' } | Measure-Object).Count"`;
 
         return new Promise((resolve) => {
             exec(psCommand, (err, stdout) => {
@@ -100,8 +120,11 @@ class ProcessManager {
 
     async launchTelegram(phoneNumber) {
         // 1. Clean up stale/phantom processes from our tracking map first
-        for (const [pid, proc] of this.activeProcesses) {
-            const isActuallyRunning = await this.verifyProcessRunning(proc.exePath);
+        // We do this carefully to avoid race conditions
+        const pidsToVerify = Array.from(this.activeProcesses.keys());
+        for (const pid of pidsToVerify) {
+            const proc = this.activeProcesses.get(pid);
+            const isActuallyRunning = await this.verifyProcessRunning(proc.exePath, pid);
             if (!isActuallyRunning) {
                 logger.warn(`Stale process detected for ${proc.phoneNumber} (PID: ${pid}). Removing from map.`);
                 this.activeProcesses.delete(pid);
@@ -200,15 +223,22 @@ class ProcessManager {
     }
 
     async rotateWindows() {
-        if (!this.rotationEnabled || this.activeProcesses.size === 0) return;
+        if (!this.rotationEnabled) return;
 
         try {
             // Get all running Telegram processes from OS
-            exec('powershell -command "Get-Process Telegram -ErrorAction SilentlyContinue | Sort-Object Id | Select-Object -ExpandProperty Id"', (err, stdout) => {
-                if (err || !stdout) return;
+            exec('powershell -command "Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"', (err, stdout) => {
+                if (err || !stdout) {
+                    // If no processes found, just return
+                    return;
+                }
 
                 const pids = stdout.trim().split(/\s+/).map(p => parseInt(p)).filter(n => !isNaN(n));
                 if (pids.length === 0) return;
+
+                // Update our internal tracking map based on what's actually running
+                // Any PID in pids that isn't in activeProcesses but matches a phoneNumber folder should ideally be tracked,
+                // but for now we focus on ensuring lastFocusedPid is valid.
 
                 // Deterministic rotation: find next in list
                 let nextIndex = 0;
@@ -224,7 +254,7 @@ class ProcessManager {
 
                 // Use the lightweight WindowHelper for rotation and clicking
                 if (fs.existsSync(this.helperExe)) {
-                    logger.info(`Rotating focus to PID: ${targetPid}`);
+                    logger.info(`Rotating focus to PID: ${targetPid} (Total: ${pids.length})`);
                     exec(`"${this.helperExe}" rotate ${targetPid} 41 53`);
                 }
             });
