@@ -232,17 +232,26 @@ class SocketClient {
     }
 
     startHeartbeat() {
+        let heartbeatCount = 0;
         this.heartbeatInterval = setInterval(async () => {
+            heartbeatCount++;
             const disk = await this.getDiskInfo();
             const cpu = await this.getCpuUsage();
+            const sessions = await this.getSessions();
+
             const stats = {
                 cpu: Math.round(cpu),
                 ram: Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100),
-                accountCount: (await this.getSessions()).length,
+                accountCount: sessions.length,
                 telegramCount: processManager.activeProcesses.size,
                 disk: disk
             };
             this.socket.emit('macro:heartbeat', stats);
+
+            // Sync sessions every 30 seconds (6 * 5s)
+            if (heartbeatCount % 6 === 0) {
+                this.socket.emit('macro:update_sessions', sessions);
+            }
         }, 5000);
     }
 

@@ -132,10 +132,22 @@ class ProcessManager {
         }
 
         // 2. Enforce dynamic limit (FIFO)
-        if (oldestPid) {
-            logger.info(`Limit of ${this.settings.maxProcesses} reached. Killing oldest process (PID: ${oldestPid}) for slot.`);
-            this.killProcess(oldestPid);
-            await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for cleanup
+        if (this.activeProcesses.size >= this.settings.maxProcesses) {
+            let oldestPid = null;
+            let oldestTime = Infinity;
+
+            for (const [pid, proc] of this.activeProcesses) {
+                if (proc.startTime < oldestTime) {
+                    oldestTime = proc.startTime;
+                    oldestPid = pid;
+                }
+            }
+
+            if (oldestPid) {
+                logger.info(`Limit of ${this.settings.maxProcesses} reached. Killing oldest process (PID: ${oldestPid}) for slot.`);
+                this.killProcess(oldestPid);
+                await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for cleanup
+            }
         }
 
         // 3. Check if already running (after safety cleanup)
