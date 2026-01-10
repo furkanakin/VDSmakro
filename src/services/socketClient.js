@@ -257,7 +257,7 @@ class SocketClient {
             heartbeatCount++;
             const disk = await this.getDiskInfo();
             const cpu = await this.getCpuUsage();
-            const sessions = await this.getSessions();
+            const sessions = await this.getSessions(false);
 
             const stats = {
                 cpu: Math.round(cpu),
