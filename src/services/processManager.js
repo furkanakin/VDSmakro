@@ -131,23 +131,22 @@ class ProcessManager {
             }
         }
 
-        // 2. Enforce dynamic limit (FIFO)
+        // 2. Enforce dynamic limit (FIFO) - LRU Style
         if (this.activeProcesses.size >= this.settings.maxProcesses) {
-            let oldestPid = null;
-            let oldestTime = Infinity;
+            // Sort by startTime to get absolute oldest
+            const sortedByAge = Array.from(this.activeProcesses.entries())
+                .sort((a, b) => a[1].startTime - b[1].startTime);
 
-            for (const [pid, proc] of this.activeProcesses) {
-                if (proc.startTime < oldestTime) {
-                    oldestTime = proc.startTime;
-                    oldestPid = pid;
-                }
-            }
-
-            if (oldestPid) {
-                logger.info(`Limit of ${this.settings.maxProcesses} reached. Killing oldest process (PID: ${oldestPid}) for slot.`);
+            // Kill oldest enough to make room
+            while (this.activeProcesses.size >= this.settings.maxProcesses && sortedByAge.length > 0) {
+                const [oldestPid, oldestProc] = sortedByAge.shift();
+                logger.info(`Limit of ${this.settings.maxProcesses} reached. Killing oldest process (PID: ${oldestPid}, Account: ${oldestProc.phoneNumber}) for new slot.`);
                 this.killProcess(oldestPid);
-                await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for cleanup
+                // No long await here, killProcess handles its own async cleanup but we want to move fast
             }
+
+            // Short grace period for OS to release handles
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
         // 3. Check if already running (after safety cleanup)
@@ -289,14 +288,17 @@ class ProcessManager {
             // 2. CRITICAL: Path-based Kill (Guarantee RAM cleanup even if PID changed)
             if (exePath) {
                 const safePath = exePath.replace(/'/g, "''");
+                // taskkill by exact path using PowerShell for precision
                 const psCommand = `powershell -command "Get-CimInstance Win32_Process -Filter \\"ExecutablePath = '${safePath}'\\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
 
                 exec(psCommand, (err) => {
-                    if (err) logger.warn(`Path-based kill failed: ${exePath}`);
-                    else logger.success(`Successfully killed process at path: ${exePath}`);
+                    if (err) logger.warn(`Path-based kill failed for ${proc.phoneNumber}`);
+                    else logger.success(`Successfully killed process for ${proc.phoneNumber}`);
                 });
             } else {
-                exec(`taskkill /PID ${pid} /F`);
+                exec(`taskkill /PID ${pid} /F`, (err) => {
+                    if (err) { /* ignore */ }
+                });
             }
         } catch (e) {
             logger.error(`Kill error for PID ${pid}:`, e);
