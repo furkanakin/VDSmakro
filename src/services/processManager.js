@@ -278,49 +278,46 @@ class ProcessManager {
         } catch (e) {
             logger.error('Rotation error:', e);
         }
-    } catch(e) {
-        logger.error('Rotation error:', e);
     }
-}
 
-killProcess(pid) {
-    if (!this.activeProcesses.has(pid)) return;
-    const proc = this.activeProcesses.get(pid);
-    const { exePath } = proc;
+    killProcess(pid) {
+        if (!this.activeProcesses.has(pid)) return;
+        const proc = this.activeProcesses.get(pid);
+        const { exePath } = proc;
 
-    try {
-        logger.info(`Killing PID ${pid} (${proc.phoneNumber})`);
-
-        // 2. CRITICAL: Cleanup using standard TaskKill (No PowerShell)
-        // Taskkill is robust and native. /T kills child processes too.
-        // First try nice kill
         try {
-            process.kill(pid);
-        } catch (e) { }
+            logger.info(`Killing PID ${pid} (${proc.phoneNumber})`);
 
-        // Then force kill by PID
-        exec(`taskkill /PID ${pid} /T /F`, (err) => {
-            // Ignore "process not found" errors as it means success
-        });
+            // 2. CRITICAL: Cleanup using standard TaskKill (No PowerShell)
+            // Taskkill is robust and native. /T kills child processes too.
+            // First try nice kill
+            try {
+                process.kill(pid);
+            } catch (e) { }
 
-        // Path based backup is too expensive with PS. We rely on PID tracking.
-        if (exePath) {
-            // only if absolutely needed, maybe check if file is locked?
-            // For now, dropping the heavy PS path check. FIFO logic should handle limits.
+            // Then force kill by PID
+            exec(`taskkill /PID ${pid} /T /F`, (err) => {
+                // Ignore "process not found" errors as it means success
+            });
+
+            // Path based backup is too expensive with PS. We rely on PID tracking.
+            if (exePath) {
+                // only if absolutely needed, maybe check if file is locked?
+                // For now, dropping the heavy PS path check. FIFO logic should handle limits.
+            }
+        } catch (e) {
+            logger.error(`Kill error for PID ${pid}:`, e);
         }
-    } catch (e) {
-        logger.error(`Kill error for PID ${pid}:`, e);
+
+        this.activeProcesses.delete(pid);
     }
 
-    this.activeProcesses.delete(pid);
-}
-
-killAll() {
-    console.log('[ProcessManager] Killing all Telegram processes...');
-    exec('taskkill /F /IM Telegram.exe');
-    this.activeProcesses.clear();
-    this.stopRotation();
-}
+    killAll() {
+        console.log('[ProcessManager] Killing all Telegram processes...');
+        exec('taskkill /F /IM Telegram.exe');
+        this.activeProcesses.clear();
+        this.stopRotation();
+    }
 }
 
 module.exports = new ProcessManager();
