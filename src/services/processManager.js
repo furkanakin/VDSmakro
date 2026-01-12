@@ -80,40 +80,35 @@ class ProcessManager {
     }
 
     async verifyProcessRunning(exePath, pid) {
-        if (!exePath) return false;
-        // Escape single quotes for PowerShell
-        const safePath = exePath.replace(/'/g, "''").toLowerCase();
-
-        return new Promise((resolve) => {
-            // First check by PID for performance if possible
-            if (pid) {
-                const checkPidCmd = `powershell -command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).Id"`;
-                exec(checkPidCmd, (err, stdout) => {
-                    if (!err && stdout && parseInt(stdout.trim()) === pid) {
-                        resolve(true);
-                        return;
-                    }
-                    // If PID check fails, fallback to path-based check
-                    this.verifyByPath(safePath).then(resolve);
-                });
-            } else {
-                this.verifyByPath(safePath).then(resolve);
+        // Fast check: Check if PID exists using Node.js native signal
+        if (pid) {
+            try {
+                process.kill(pid, 0); // Throws if PID doesn't exist
+                return true;
+            } catch (e) {
+                // PID doesn't exist, proceed to path check (handle PID reuse or crash)
+                if (e.code === 'EPERM') return true; // Exists but no permission (still running)
             }
-        });
+        }
+
+        // Fallback: Path check using tasklist (much lighter than PowerShell)
+        return this.verifyByPath(exePath);
     }
 
     async verifyByPath(safePath) {
-        // Get-CimInstance is efficient. We compare lowercase paths to avoid casing issues.
-        const psCommand = `powershell -command "(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLower() -eq '${safePath}' } | Measure-Object).Count"`;
+        if (!safePath) return false;
+        const filename = path.basename(safePath);
 
         return new Promise((resolve) => {
-            exec(psCommand, (err, stdout) => {
+            // Use tasklist with filter (faster than Get-CimInstance)
+            // IM = Image Name
+            exec(`tasklist /FI "IMAGENAME eq ${filename}" /FO CSV /NH`, (err, stdout) => {
                 if (err || !stdout) {
                     resolve(false);
                     return;
                 }
-                const count = parseInt(stdout.trim());
-                resolve(count > 0);
+                // stdout contains lines if process exists
+                resolve(stdout.toLowerCase().includes(filename.toLowerCase()));
             });
         });
     }
@@ -237,20 +232,31 @@ class ProcessManager {
         if (!this.rotationEnabled) return;
 
         try {
-            // Get all running Telegram processes from OS
-            exec('powershell -command "Get-Process Telegram -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"', (err, stdout) => {
-                if (err || !stdout) {
-                    // If no processes found, just return
-                    return;
-                }
+            // Get running Telegram processes using WindowHelper (much faster/lighter using User32.dll)
+            // If WindowHelper not available, use tasklist
 
-                const pids = stdout.trim().split(/\s+/).map(p => parseInt(p)).filter(n => !isNaN(n));
+            // For now, we rely on tasklist to find PIDs quickly without PowerShell
+            exec('tasklist /FI "IMAGENAME eq Telegram.exe" /FO CSV /NH', (err, stdout) => {
+                if (err || !stdout) return;
+
+                // Parse CSV output: "Image Name","PID","Session Name","Session#","Mem Usage"
+                // "Telegram.exe","1234","Console","1","50,000 K"
+                const pids = [];
+                const lines = stdout.trim().split('\n');
+
+                lines.forEach(line => {
+                    const parts = line.split(',');
+                    if (parts.length >= 2) {
+                        // Remove quotes and parse PID
+                        const pidStr = parts[1].replace(/"/g, '');
+                        const pid = parseInt(pidStr);
+                        if (!isNaN(pid)) pids.push(pid);
+                    }
+                });
+
                 if (pids.length === 0) return;
 
-                // Update our internal tracking map based on what's actually running
-                // Any PID in pids that isn't in activeProcesses but matches a phoneNumber folder should ideally be tracked,
-                // but for now we focus on ensuring lastFocusedPid is valid.
-
+                // Rot logic remains same...
                 // Deterministic rotation: find next in list
                 let nextIndex = 0;
                 if (this.lastFocusedPid) {
@@ -263,56 +269,58 @@ class ProcessManager {
                 const targetPid = pids[nextIndex];
                 this.lastFocusedPid = targetPid;
 
-                // Use the lightweight WindowHelper for rotation and clicking
+                // Use the lightweight WindowHelper for rotation
                 if (fs.existsSync(this.helperExe)) {
-                    logger.info(`Rotating focus to PID: ${targetPid} (Total: ${pids.length})`);
+                    // logger.info(`Rotating focus to PID: ${targetPid}`); // Reduced logging
                     exec(`"${this.helperExe}" rotate ${targetPid} 41 53`);
                 }
             });
         } catch (e) {
             logger.error('Rotation error:', e);
         }
+    } catch(e) {
+        logger.error('Rotation error:', e);
     }
+}
 
-    killProcess(pid) {
-        if (!this.activeProcesses.has(pid)) return;
-        const proc = this.activeProcesses.get(pid);
-        const { exePath } = proc;
+killProcess(pid) {
+    if (!this.activeProcesses.has(pid)) return;
+    const proc = this.activeProcesses.get(pid);
+    const { exePath } = proc;
 
+    try {
+        logger.info(`Killing PID ${pid} (${proc.phoneNumber})`);
+
+        // 2. CRITICAL: Cleanup using standard TaskKill (No PowerShell)
+        // Taskkill is robust and native. /T kills child processes too.
+        // First try nice kill
         try {
-            logger.info(`Killing PID ${pid} (${proc.phoneNumber})`);
+            process.kill(pid);
+        } catch (e) { }
 
-            // 1. Try standard process kill
-            try { process.kill(pid); } catch (e) { }
+        // Then force kill by PID
+        exec(`taskkill /PID ${pid} /T /F`, (err) => {
+            // Ignore "process not found" errors as it means success
+        });
 
-            // 2. CRITICAL: Path-based Kill (Guarantee RAM cleanup even if PID changed)
-            if (exePath) {
-                const safePath = exePath.replace(/'/g, "''");
-                // taskkill by exact path using PowerShell for precision
-                const psCommand = `powershell -command "Get-CimInstance Win32_Process -Filter \\"ExecutablePath = '${safePath}'\\" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
-
-                exec(psCommand, (err) => {
-                    if (err) logger.warn(`Path-based kill failed for ${proc.phoneNumber}`);
-                    else logger.success(`Successfully killed process for ${proc.phoneNumber}`);
-                });
-            } else {
-                exec(`taskkill /PID ${pid} /F`, (err) => {
-                    if (err) { /* ignore */ }
-                });
-            }
-        } catch (e) {
-            logger.error(`Kill error for PID ${pid}:`, e);
+        // Path based backup is too expensive with PS. We rely on PID tracking.
+        if (exePath) {
+            // only if absolutely needed, maybe check if file is locked?
+            // For now, dropping the heavy PS path check. FIFO logic should handle limits.
         }
-
-        this.activeProcesses.delete(pid);
+    } catch (e) {
+        logger.error(`Kill error for PID ${pid}:`, e);
     }
 
-    killAll() {
-        console.log('[ProcessManager] Killing all Telegram processes...');
-        exec('taskkill /F /IM Telegram.exe');
-        this.activeProcesses.clear();
-        this.stopRotation();
-    }
+    this.activeProcesses.delete(pid);
+}
+
+killAll() {
+    console.log('[ProcessManager] Killing all Telegram processes...');
+    exec('taskkill /F /IM Telegram.exe');
+    this.activeProcesses.clear();
+    this.stopRotation();
+}
 }
 
 module.exports = new ProcessManager();

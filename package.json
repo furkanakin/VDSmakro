@@ -1,6 +1,6 @@
 {
     "name": "vds-makro-agent",
-    "version": "1.7.1",
+    "version": "1.7.2",
     "description": "CLI-based Telegram automation agent for VDS/VPS",
     "main": "src/index.js",
     "scripts": {

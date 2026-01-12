@@ -19,6 +19,8 @@ class SocketClient {
         this.heartbeatInterval = null;
         this.sessionCache = [];
         this.lastSessionUpdate = 0;
+        this.diskCache = null;
+        this.lastDiskUpdate = 0;
     }
 
     loadServerId() {
@@ -313,40 +315,76 @@ class SocketClient {
 
     async getCpuUsage() {
         return new Promise((resolve) => {
-            try {
-                const { exec } = require('child_process');
-                exec('powershell -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average"', (err, stdout) => {
-                    if (err) return resolve(0);
-                    resolve(parseFloat(stdout) || 0);
-                });
-            } catch (e) {
-                console.error('[Socket] getCpuUsage spawn error:', e.message);
-                resolve(0);
-            }
+            // Use wmic (lighter than PS) or just return loadavg as approximation (very fast)
+            // Windows loadavg is not always accurate in Node, so we use a simple wmic command
+            // "wmic cpu get loadpercentage"
+            const { exec } = require('child_process');
+            exec('wmic cpu get loadpercentage', (err, stdout) => {
+                if (err || !stdout) {
+                    resolve(0);
+                    return;
+                }
+                const lines = stdout.trim().split('\n');
+                if (lines.length >= 2) {
+                    const val = parseInt(lines[1].trim());
+                    resolve(isNaN(val) ? 0 : val);
+                } else {
+                    resolve(0);
+                }
+            });
         });
     }
 
+    // Cache disk info to avoid spamming wmic
+    // Disk doesn't change that often
     async getDiskInfo() {
+        const now = Date.now();
+        if (this.diskCache && (now - this.lastDiskUpdate < 60000)) {
+            return this.diskCache;
+        }
+
         return new Promise((resolve) => {
-            try {
-                const { exec } = require('child_process');
-                exec('powershell -Command "Get-PSDrive C | Select-Object @{Name=\'Total\';Expression={($_.Used + $_.Free) / 1GB}}, @{Name=\'Free\';Expression={$_.Free / 1GB}} | ConvertTo-Json"', (err, stdout) => {
-                    if (err) return resolve({ total: 0, free: 0, used: 0, percent: 0 });
-                    try {
-                        const data = JSON.parse(stdout);
-                        const total = Math.round(data.Total);
-                        const free = Math.round(data.Free);
+            const { exec } = require('child_process');
+            // wmic logicaldisk where "DeviceID='C:'" get FreeSpace,Size
+            exec('wmic logicaldisk where "DeviceID=\'C:\'" get FreeSpace,Size', (err, stdout) => {
+                if (err || !stdout) {
+                    resolve({ total: 0, free: 0, used: 0, percent: 0 });
+                    return;
+                }
+
+                // Output format:
+                // FreeSpace     Size
+                // 123456789     987654321
+
+                try {
+                    const lines = stdout.trim().split('\n');
+                    if (lines.length < 2) {
+                        throw new Error('Invalid output');
+                    }
+
+                    // Filter empty lines and get the data line
+                    const dataLine = lines[1].trim();
+                    const parts = dataLine.split(/\s+/);
+
+                    if (parts.length >= 2) {
+                        const freeBytes = parseInt(parts[0]);
+                        const sizeBytes = parseInt(parts[1]);
+
+                        const total = Math.round(sizeBytes / (1024 * 1024 * 1024)); // GB
+                        const free = Math.round(freeBytes / (1024 * 1024 * 1024)); // GB
                         const used = total - free;
                         const percent = Math.round((used / total) * 100);
-                        resolve({ total, free, used, percent });
-                    } catch (e) {
-                        resolve({ total: 0, free: 0, used: 0, percent: 0 });
+
+                        this.diskCache = { total, free, used, percent };
+                        this.lastDiskUpdate = now;
+                        resolve(this.diskCache);
+                    } else {
+                        throw new Error('Parse error');
                     }
-                });
-            } catch (e) {
-                console.error('[Socket] getDiskInfo spawn error:', e.message);
-                resolve({ total: 0, free: 0, used: 0, percent: 0 });
-            }
+                } catch (e) {
+                    resolve({ total: 0, free: 0, used: 0, percent: 0 });
+                }
+            });
         });
     }
 }
