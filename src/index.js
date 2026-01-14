@@ -27,10 +27,26 @@ async function main() {
         logger.info(`Agent is running and waiting for commands (Master: ${managerUrl})`);
 
         // 4. Handle graceful shutdown
-        process.on('SIGINT', () => {
-            console.log('[Main] Shutting down...');
+        const shutdown = (signal) => {
+            console.log(`[Main] ${signal} received. Shutting down...`);
             processManager.killAll();
-            process.exit();
+            process.exit(0);
+        };
+
+        process.on('SIGINT', () => shutdown('SIGINT'));
+        process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+        // Handle unexpected crashes
+        process.on('uncaughtException', (err) => {
+            logger.error('Uncaught Exception:', err);
+            processManager.killAll();
+            process.exit(1);
+        });
+
+        process.on('unhandledRejection', (reason, promise) => {
+            logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+            processManager.killAll();
+            process.exit(1);
         });
 
     } catch (err) {

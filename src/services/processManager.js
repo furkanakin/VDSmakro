@@ -313,10 +313,34 @@ class ProcessManager {
     }
 
     killAll() {
-        console.log('[ProcessManager] Killing all Telegram processes...');
-        exec('taskkill /F /IM Telegram.exe');
+        logger.info('[ProcessManager] Killing all tracked Telegram processes...');
+        for (const pid of this.activeProcesses.keys()) {
+            this.killProcess(pid);
+        }
+        
+        // Backup: Ensure any remaining Telegram.exe processes started by us are gone
+        this.forceKillAllTelegramProcesses();
+        
         this.activeProcesses.clear();
         this.stopRotation();
+    }
+
+    /**
+     * Forcefully kills ALL Telegram.exe processes in the system.
+     * This is used at bootstrap to clear 'ghost' processes from previous runs.
+     */
+    forceKillAllTelegramProcesses() {
+        try {
+            logger.info('[ProcessManager] Performing global Telegram process cleanup (TaskKill)...');
+            // /F: Forcefully terminate /IM: Image Name /T: Terminate child processes
+            execSync('taskkill /F /IM Telegram.exe /T', { stdio: 'ignore' });
+            logger.success('[ProcessManager] Global cleanup complete.');
+        } catch (e) {
+            // Taskkill returns error code 128 if process not found, which is fine
+            if (e.status !== 128) {
+                logger.warn(`[ProcessManager] Taskkill warning: ${e.message}`);
+            }
+        }
     }
 }
 

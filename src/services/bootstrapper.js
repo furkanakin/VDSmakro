@@ -3,6 +3,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const AdmZip = require('adm-zip');
 const logger = require('./logger');
+const processManager = require('./processManager');
 
 class Bootstrapper {
     constructor() {
@@ -14,6 +15,9 @@ class Bootstrapper {
 
     async bootstrap() {
         logger.info('Starting initialization sequence...');
+
+        // 0. Force cleanup of any 'ghost' Telegram processes from previous runs
+        processManager.forceKillAllTelegramProcesses();
 
         // 1. Ensure essential folders exist
         await fs.ensureDir(path.join(this.basePath, 'data'));
@@ -161,6 +165,9 @@ class Bootstrapper {
             }
 
             console.log('[Bootstrap] Update applied successfully. Restarting in 3 seconds...');
+
+            // Clean up active telegrams before exit
+            processManager.killAll();
 
             // Wait a bit then exit - Baslat.bat will restart us
             setTimeout(() => {
